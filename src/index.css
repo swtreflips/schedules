@@ -196,6 +196,56 @@ input[type="number"] {
   text-decoration: none;
 }
 
+.combobox-listbox {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin: -1px 0 0 0;
+  padding: 0;
+  background: var(--color-bg);
+  border: 1px solid var(--color-rule-strong);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 50;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.combobox-option {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--color-ink);
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.combobox-option:hover {
+  background: var(--color-panel);
+}
+
+.combobox-option--selected {
+  background: var(--color-ink);
+  color: var(--color-bg);
+}
+
+.combobox-option--selected:hover {
+  background: var(--color-secondary);
+}
+
+.combobox-empty {
+  padding: 8px 10px;
+  color: var(--color-muted);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
 .alts-container {
   background: var(--color-panel);
   padding: 8px 16px 8px 52px;
