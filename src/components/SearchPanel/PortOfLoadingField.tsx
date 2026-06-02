@@ -14,10 +14,9 @@ export function PortOfLoadingField({ value, onChange }: Props) {
   const suggestions: string[] = [];
 
   return (
-    <div className="relative flex flex-col" style={{ width: 240 }}>
+    <div className="relative flex flex-col" style={{ width: 220 }}>
       <label htmlFor={id} className="field-label">
         Port of Loading
-        <span className="ml-1.5 font-mono text-faint">01</span>
       </label>
 
       <div

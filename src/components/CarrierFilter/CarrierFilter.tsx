@@ -16,20 +16,34 @@ export function CarrierFilter({ value, onChange, carriers = CARRIERS }: Props) {
 
   const enableAll = () => onChange(new Set(carriers.map((c) => c.code)));
   const enableNone = () => onChange(new Set());
-  const enableRatedOnly = () =>
-    onChange(new Set(carriers.filter((c) => c.hasRates).map((c) => c.code)));
 
   return (
     <div
-      className="flex flex-wrap items-center gap-x-5 gap-y-2"
+      className="flex flex-col gap-2"
       role="group"
       aria-label="Carrier filter"
     >
-      <span className="eyebrow shrink-0">
-        Carriers · {value.size}/{carriers.length}
-      </span>
+      <div className="flex items-center justify-between gap-6">
+        <span className="eyebrow">
+          Carriers · {value.size}/{carriers.length}
+        </span>
+        <div className="flex items-center">
+          <button type="button" className="quick-action" onClick={enableAll}>
+            All
+          </button>
+          <span className="quick-action-sep" aria-hidden>
+            ·
+          </span>
+          <button type="button" className="quick-action" onClick={enableNone}>
+            None
+          </button>
+        </div>
+      </div>
 
-      <div className="flex flex-wrap gap-1.5">
+      <div
+        className="grid gap-1.5"
+        style={{ gridTemplateColumns: "repeat(4, 56px)" }}
+      >
         {carriers.map((c) => {
           const active = value.has(c.code);
           return (
@@ -39,7 +53,7 @@ export function CarrierFilter({ value, onChange, carriers = CARRIERS }: Props) {
               role="switch"
               aria-checked={active}
               aria-label={c.name}
-              title={c.name + (c.hasRates ? "" : " — no rates loaded")}
+              title={c.name}
               onClick={() => toggle(c.code)}
               className={
                 "carrier-chip " +
@@ -47,28 +61,9 @@ export function CarrierFilter({ value, onChange, carriers = CARRIERS }: Props) {
               }
             >
               {c.code}
-              {!c.hasRates && <sup aria-hidden>·</sup>}
             </button>
           );
         })}
-      </div>
-
-      <div className="flex items-center ml-auto">
-        <button type="button" className="quick-action" onClick={enableAll}>
-          All
-        </button>
-        <span className="quick-action-sep" aria-hidden>
-          ·
-        </span>
-        <button type="button" className="quick-action" onClick={enableNone}>
-          None
-        </button>
-        <span className="quick-action-sep" aria-hidden>
-          ·
-        </span>
-        <button type="button" className="quick-action" onClick={enableRatedOnly}>
-          Rated only
-        </button>
       </div>
     </div>
   );

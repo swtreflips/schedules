@@ -1,22 +1,22 @@
+import { useState } from "react";
 import { SearchPanel } from "./components/SearchPanel/SearchPanel";
 import { SchedulesGrid } from "./components/SchedulesGrid/SchedulesGrid";
+import type { ViewMode } from "./types/view";
 
 export function App() {
+  const [viewMode, setViewMode] = useState<ViewMode>("carrier");
+
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="flex items-baseline justify-between px-10 pt-5 pb-3">
-        <div className="flex items-baseline gap-6">
-          <h1 className="text-[22px] font-medium leading-none tracking-[-0.02em] text-ink">
-            Schedules<span className="accent-mark">.</span>
-          </h1>
-          <p className="eyebrow">ocean freight, qualified geographically</p>
-        </div>
-        <div className="section-marker">No. 01 / Search</div>
+      <header className="px-8 pt-3 pb-2">
+        <h1 className="text-[22px] font-medium leading-none tracking-[-0.02em] text-ink">
+          Schedules<span className="accent-mark">.</span>
+        </h1>
       </header>
 
-      <SearchPanel />
+      <SearchPanel viewMode={viewMode} onViewModeChange={setViewMode} />
 
-      <SchedulesGrid />
+      <SchedulesGrid viewMode={viewMode} />
     </div>
   );
 }

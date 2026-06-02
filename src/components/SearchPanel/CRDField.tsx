@@ -12,10 +12,9 @@ export function CRDField({ value, onChange }: Props) {
   const min = today();
 
   return (
-    <div className="flex flex-col" style={{ width: 160 }}>
+    <div className="flex flex-col" style={{ width: 130 }}>
       <label htmlFor={id} className="field-label">
         Cargo Ready Date
-        <span className="ml-1.5 font-mono text-faint">03</span>
       </label>
 
       <div className="field-underline">
