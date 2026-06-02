@@ -1,0 +1,215 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #ffffff;
+  --color-panel: #fafafa;
+  --color-ink: #0a0a0a;
+  --color-secondary: #404040;
+  --color-muted: #737373;
+  --color-faint: #a3a3a3;
+  --color-rule: #e5e5e5;
+  --color-rule-strong: #0a0a0a;
+  --color-accent: #dc2626;
+
+  --font-sans: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+
+  --radius-none: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  text-transform: lowercase;
+}
+
+.field-label {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--color-secondary);
+  margin-bottom: 5px;
+}
+
+.field-underline {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--color-rule-strong);
+  padding: 4px 0;
+  transition: border-color 0.15s ease;
+}
+
+.field-underline:hover {
+  border-bottom-color: var(--color-accent);
+}
+
+.field-underline:focus-within {
+  border-bottom-color: var(--color-accent);
+  border-bottom-width: 2px;
+  padding-bottom: 3px;
+}
+
+.field-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--color-ink);
+  min-width: 0;
+  padding: 0;
+}
+
+.field-input::placeholder {
+  color: var(--color-faint);
+  font-weight: 300;
+}
+
+.field-input.date {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.section-marker {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-muted);
+  letter-spacing: 0.04em;
+}
+
+.section-marker::before {
+  content: "——— ";
+  color: var(--color-faint);
+}
+
+.accent-mark {
+  color: var(--color-accent);
+}
+
+.carrier-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 3px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--color-rule-strong);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+  user-select: none;
+  line-height: 1.4;
+}
+
+.carrier-chip:hover {
+  background: var(--color-panel);
+}
+
+.carrier-chip--active {
+  background: var(--color-ink);
+  color: var(--color-bg);
+  border-color: var(--color-ink);
+}
+
+.carrier-chip--active:hover {
+  background: var(--color-secondary);
+}
+
+.carrier-chip--inactive {
+  background: transparent;
+  color: var(--color-faint);
+  border-color: var(--color-rule);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.carrier-chip--inactive:hover {
+  color: var(--color-muted);
+  border-color: var(--color-rule-strong);
+  text-decoration: none;
+}
+
+.carrier-chip sup {
+  color: var(--color-accent);
+  font-size: 13px;
+  line-height: 0;
+  vertical-align: top;
+  margin-left: 1px;
+}
+
+.quick-action {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--color-muted);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  transition: color 0.12s ease;
+}
+
+.quick-action:hover {
+  color: var(--color-accent);
+}
+
+.quick-action-sep {
+  color: var(--color-faint);
+  margin: 0 8px;
+  user-select: none;
+}
