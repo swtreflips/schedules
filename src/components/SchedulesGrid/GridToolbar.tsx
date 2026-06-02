@@ -1,18 +1,20 @@
 interface Props {
   rowCount: number;
+  label?: string;
   onDownloadCsv: () => void;
 }
 
-export function GridToolbar({ rowCount, onDownloadCsv }: Props) {
+export function GridToolbar({ rowCount, label, onDownloadCsv }: Props) {
   const disabled = rowCount === 0;
-  const label =
-    rowCount === 0
+  const display =
+    label ??
+    (rowCount === 0
       ? "no rows"
-      : `${rowCount} schedule${rowCount === 1 ? "" : "s"}`;
+      : `${rowCount} schedule${rowCount === 1 ? "" : "s"}`);
 
   return (
     <div className="grid-toolbar">
-      <span className="eyebrow">{label}</span>
+      <span className="eyebrow">{display}</span>
       <button
         type="button"
         className="icon-button"

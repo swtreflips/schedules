@@ -6,38 +6,50 @@ import { RadiusField } from "./RadiusField";
 import { SearchButton } from "./SearchButton";
 import { CarrierFilter } from "../CarrierFilter/CarrierFilter";
 import { ViewToggle } from "../ViewToggle/ViewToggle";
-import { CARRIERS } from "../../types/carrier";
 import type { ViewMode } from "../../types/view";
+import type { SearchStatus } from "../../App";
+import type { SearchParams } from "../../state/searchSchedules";
 
 interface Props {
   viewMode: ViewMode;
   onViewModeChange: (next: ViewMode) => void;
+  crd: string;
+  onCrdChange: (next: string) => void;
+  enabledCarriers: Set<string>;
+  onEnabledCarriersChange: (next: Set<string>) => void;
+  onSearch: (params: SearchParams) => void | Promise<void>;
+  status: SearchStatus;
+  errorMessage: string | null;
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
 const DEFAULT_RADIUS_MILES = 187;
 
-export function SearchPanel({ viewMode, onViewModeChange }: Props) {
+export function SearchPanel({
+  viewMode,
+  onViewModeChange,
+  crd,
+  onCrdChange,
+  enabledCarriers,
+  onEnabledCarriersChange,
+  onSearch,
+  status,
+  errorMessage,
+}: Props) {
   const [pol, setPol] = useState("");
   const [destination, setDestination] = useState("");
-  const [crd, setCrd] = useState(today);
   const [radius, setRadius] = useState(DEFAULT_RADIUS_MILES);
-  const [enabledCarriers, setEnabledCarriers] = useState<Set<string>>(
-    () => new Set(CARRIERS.map((c) => c.code))
-  );
 
   const canSubmit =
-    pol.trim().length > 0 && destination.trim().length > 0 && radius > 0;
+    pol.trim().length > 0 &&
+    destination.trim().length > 0 &&
+    radius > 0 &&
+    status !== "loading";
 
   const handleSubmit = () => {
-    // TODO: wire to geocoder + supabase RPC (slice 2 in DEPLOY.md)
-    console.log("search submit", {
-      pol,
-      destination,
-      crd,
-      radius,
-      enabledCarriers: Array.from(enabledCarriers),
-      viewMode,
+    onSearch({
+      pol: pol.trim(),
+      destination: destination.trim(),
+      radiusMiles: radius,
     });
   };
 
@@ -54,15 +66,34 @@ export function SearchPanel({ viewMode, onViewModeChange }: Props) {
               value={destination}
               onChange={setDestination}
             />
-            <CRDField value={crd} onChange={setCrd} />
+            <CRDField value={crd} onChange={onCrdChange} />
             <RadiusField value={radius} onChange={setRadius} />
             <SearchButton onClick={handleSubmit} disabled={!canSubmit} />
           </div>
 
-          <ViewToggle value={viewMode} onChange={onViewModeChange} />
+          <div className="flex items-center gap-4">
+            <ViewToggle value={viewMode} onChange={onViewModeChange} />
+
+            {status === "loading" && (
+              <span className="font-mono text-[11px] tracking-[0.04em] text-muted">
+                searching…
+              </span>
+            )}
+            {status === "error" && errorMessage && (
+              <span
+                className="font-mono text-[11px] tracking-[0.02em] text-accent"
+                title={errorMessage}
+              >
+                error — {errorMessage}
+              </span>
+            )}
+          </div>
         </div>
 
-        <CarrierFilter value={enabledCarriers} onChange={setEnabledCarriers} />
+        <CarrierFilter
+          value={enabledCarriers}
+          onChange={onEnabledCarriersChange}
+        />
       </div>
     </section>
   );
