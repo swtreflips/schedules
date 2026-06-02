@@ -13,7 +13,7 @@ const OPTIONS: Array<{ value: ViewMode; label: string; hint: string }> = [
   },
   {
     value: "rank",
-    label: "Ranking",
+    label: "Rank",
     hint: "Top schedules globally by earliest ETA",
   },
 ];
