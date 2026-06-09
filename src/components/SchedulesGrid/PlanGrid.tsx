@@ -13,10 +13,14 @@ import {
 } from "../../state/grouping";
 import { GridToolbar } from "./GridToolbar";
 import { AlternativesRow } from "./AlternativesRow";
+import { PodFilter } from "./PodFilter";
 import { swissTheme } from "./theme";
 
 interface Props {
   rows: Schedule[];
+  availablePods: string[];
+  excludedPods: Set<string>;
+  onExcludedPodsChange: (next: Set<string>) => void;
 }
 
 const ALT_ITEM_HEIGHT = 32;
@@ -36,7 +40,12 @@ function scheduleArrayField<K extends keyof Schedule>(key: K) {
   };
 }
 
-export function PlanGrid({ rows }: Props) {
+export function PlanGrid({
+  rows,
+  availablePods,
+  excludedPods,
+  onExcludedPodsChange,
+}: Props) {
   const gridRef = useRef<AgGridReact<PlanRow>>(null);
   const [selections, setSelections] = useState<Map<string, string>>(new Map());
   const [expansions, setExpansions] = useState<Set<string>>(new Set());
@@ -190,7 +199,13 @@ export function PlanGrid({ rows }: Props) {
         rowCount={carrierCount}
         label={label}
         onDownloadCsv={handleDownloadCsv}
-      />
+      >
+        <PodFilter
+          available={availablePods}
+          excluded={excludedPods}
+          onChange={onExcludedPodsChange}
+        />
+      </GridToolbar>
       <div className="flex-1 min-h-0">
         <AgGridReact<PlanRow>
           ref={gridRef}

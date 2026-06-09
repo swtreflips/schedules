@@ -1,23 +1,43 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AgGridReact } from "ag-grid-react";
 import { type ColDef } from "ag-grid-community";
 import type { Schedule } from "../../types/schedule";
 import { GridToolbar } from "./GridToolbar";
+import { PodFilter } from "./PodFilter";
 import { swissTheme } from "./theme";
 
 interface Props {
   rows: Schedule[];
+  availablePods: string[];
+  excludedPods: Set<string>;
+  onExcludedPodsChange: (next: Set<string>) => void;
 }
 
 const RANK_TOP_N = 20;
 
-export function RankGrid({ rows }: Props) {
-  const gridRef = useRef<AgGridReact<Schedule>>(null);
+type SortKey = "eta" | "etd" | "transit_time_days";
 
-  const rankRows = useMemo(
-    () => [...rows].sort((a, b) => a.eta.localeCompare(b.eta)).slice(0, RANK_TOP_N),
-    [rows]
-  );
+export function RankGrid({
+  rows,
+  availablePods,
+  excludedPods,
+  onExcludedPodsChange,
+}: Props) {
+  const gridRef = useRef<AgGridReact<Schedule>>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("eta");
+
+  const rankRows = useMemo(() => {
+    const sorted = [...rows].sort((a, b) => {
+      if (sortKey === "transit_time_days") {
+        return a.transit_time_days - b.transit_time_days;
+      }
+      if (sortKey === "etd") {
+        return a.etd.localeCompare(b.etd);
+      }
+      return a.eta.localeCompare(b.eta);
+    });
+    return sorted.slice(0, RANK_TOP_N);
+  }, [rows, sortKey]);
 
   const columnDefs = useMemo<ColDef<Schedule>[]>(
     () => [
@@ -99,7 +119,40 @@ export function RankGrid({ rows }: Props) {
         rowCount={shownCount}
         label={label}
         onDownloadCsv={handleDownloadCsv}
-      />
+      >
+        <PodFilter
+          available={availablePods}
+          excluded={excludedPods}
+          onChange={onExcludedPodsChange}
+        />
+        <div className="sort-toggle" role="group" aria-label="Sort by">
+          <span className="sort-toggle__label">sort</span>
+          <button
+            type="button"
+            className={`sort-toggle__tab${sortKey === "eta" ? " sort-toggle__tab--active" : ""}`}
+            onClick={() => setSortKey("eta")}
+            aria-pressed={sortKey === "eta"}
+          >
+            ETA
+          </button>
+          <button
+            type="button"
+            className={`sort-toggle__tab${sortKey === "etd" ? " sort-toggle__tab--active" : ""}`}
+            onClick={() => setSortKey("etd")}
+            aria-pressed={sortKey === "etd"}
+          >
+            ETD
+          </button>
+          <button
+            type="button"
+            className={`sort-toggle__tab${sortKey === "transit_time_days" ? " sort-toggle__tab--active" : ""}`}
+            onClick={() => setSortKey("transit_time_days")}
+            aria-pressed={sortKey === "transit_time_days"}
+          >
+            Transit
+          </button>
+        </div>
+      </GridToolbar>
       <div className="flex-1 min-h-0">
         <AgGridReact<Schedule>
           ref={gridRef}
@@ -107,7 +160,7 @@ export function RankGrid({ rows }: Props) {
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
           rowData={rankRows}
-          overlayNoRowsTemplate='<div style="text-align: center;"><div style="font-family: Geist, system-ui, sans-serif; font-size: 15px; font-weight: 500; color: #0A0A0A; margin-bottom: 6px;">No matches yet</div><div style="font-family: Geist Mono, ui-monospace, monospace; font-size: 11px; color: #737373; letter-spacing: 0.02em;">Run a search to see top schedules by ETA.</div></div>'
+          overlayNoRowsTemplate='<div style="text-align: center;"><div style="font-family: Geist, system-ui, sans-serif; font-size: 15px; font-weight: 500; color: #0A0A0A; margin-bottom: 6px;">No matches yet</div><div style="font-family: Geist Mono, ui-monospace, monospace; font-size: 11px; color: #737373; letter-spacing: 0.02em;">Run a search to see top schedules.</div></div>'
           suppressCellFocus
         />
       </div>

@@ -1,10 +1,13 @@
+import type { ReactNode } from "react";
+
 interface Props {
   rowCount: number;
   label?: string;
   onDownloadCsv: () => void;
+  children?: ReactNode;
 }
 
-export function GridToolbar({ rowCount, label, onDownloadCsv }: Props) {
+export function GridToolbar({ rowCount, label, onDownloadCsv, children }: Props) {
   const disabled = rowCount === 0;
   const display =
     label ??
@@ -15,27 +18,30 @@ export function GridToolbar({ rowCount, label, onDownloadCsv }: Props) {
   return (
     <div className="grid-toolbar">
       <span className="eyebrow">{display}</span>
-      <button
-        type="button"
-        className="icon-button"
-        onClick={onDownloadCsv}
-        disabled={disabled}
-        title="Download visible rows as CSV"
-        aria-label="Download CSV"
-      >
-        <svg
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          strokeLinecap="square"
-          aria-hidden
+      <div className="flex items-center gap-3">
+        {children}
+        <button
+          type="button"
+          className="icon-button"
+          onClick={onDownloadCsv}
+          disabled={disabled}
+          title="Download visible rows as CSV"
+          aria-label="Download CSV"
         >
-          <path d="M8 2 V 10" />
-          <path d="M4.5 7 L 8 10.5 L 11.5 7" />
-          <path d="M2.5 13.5 H 13.5" />
-        </svg>
-      </button>
+          <svg
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinecap="square"
+            aria-hidden
+          >
+            <path d="M8 2 V 10" />
+            <path d="M4.5 7 L 8 10.5 L 11.5 7" />
+            <path d="M2.5 13.5 H 13.5" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }

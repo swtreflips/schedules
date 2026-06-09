@@ -3,13 +3,11 @@ import { useId } from "react";
 interface Props {
   value: string;
   onChange: (next: string) => void;
+  min?: string;
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
-
-export function CRDField({ value, onChange }: Props) {
+export function CRDField({ value, onChange, min }: Props) {
   const id = useId();
-  const min = today();
 
   return (
     <div className="flex flex-col" style={{ width: 130 }}>

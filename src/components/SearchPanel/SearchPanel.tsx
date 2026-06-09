@@ -15,6 +15,7 @@ interface Props {
   onViewModeChange: (next: ViewMode) => void;
   crd: string;
   onCrdChange: (next: string) => void;
+  minCrd?: string;
   enabledCarriers: Set<string>;
   onEnabledCarriersChange: (next: Set<string>) => void;
   onSearch: (params: SearchParams) => void | Promise<void>;
@@ -29,6 +30,7 @@ export function SearchPanel({
   onViewModeChange,
   crd,
   onCrdChange,
+  minCrd,
   enabledCarriers,
   onEnabledCarriersChange,
   onSearch,
@@ -66,7 +68,7 @@ export function SearchPanel({
               value={destination}
               onChange={setDestination}
             />
-            <CRDField value={crd} onChange={onCrdChange} />
+            <CRDField value={crd} onChange={onCrdChange} min={minCrd} />
             <RadiusField value={radius} onChange={setRadius} />
             <SearchButton onClick={handleSubmit} disabled={!canSubmit} />
           </div>

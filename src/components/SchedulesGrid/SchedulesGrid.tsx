@@ -9,15 +9,34 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 interface Props {
   viewMode: ViewMode;
   rows: Schedule[];
+  availablePods: string[];
+  excludedPods: Set<string>;
+  onExcludedPodsChange: (next: Set<string>) => void;
 }
 
-export function SchedulesGrid({ viewMode, rows }: Props) {
+export function SchedulesGrid({
+  viewMode,
+  rows,
+  availablePods,
+  excludedPods,
+  onExcludedPodsChange,
+}: Props) {
   return (
     <div className="flex-1 min-h-0 flex flex-col border-t border-rule-strong">
       {viewMode === "carrier" ? (
-        <PlanGrid rows={rows} />
+        <PlanGrid
+          rows={rows}
+          availablePods={availablePods}
+          excludedPods={excludedPods}
+          onExcludedPodsChange={onExcludedPodsChange}
+        />
       ) : (
-        <RankGrid rows={rows} />
+        <RankGrid
+          rows={rows}
+          availablePods={availablePods}
+          excludedPods={excludedPods}
+          onExcludedPodsChange={onExcludedPodsChange}
+        />
       )}
     </div>
   );

@@ -16,6 +16,7 @@ export function App() {
   const [enabledCarriers, setEnabledCarriers] = useState<Set<string>>(
     () => new Set(CARRIERS.map((c) => c.code))
   );
+  const [excludedPods, setExcludedPods] = useState<Set<string>>(() => new Set());
 
   const [rows, setRows] = useState<Schedule[]>([]);
   const [status, setStatus] = useState<SearchStatus>("idle");
@@ -27,9 +28,11 @@ export function App() {
     try {
       const fetched = await searchSchedules(params);
       setRows(fetched);
+      setExcludedPods(new Set());
       setStatus("idle");
     } catch (e) {
       setRows([]);
+      setExcludedPods(new Set());
       setErrorMessage((e as Error).message);
       setStatus("error");
     }
@@ -37,12 +40,38 @@ export function App() {
 
   // Client-side filters applied on top of the server-fetched rows.
   // No re-fetch happens when CRD or carriers change — instant.
+  // ETD comparison is lexicographic on the YYYY-MM-DD prefix to stay
+  // timezone-safe (avoids new Date("2026-06-08") UTC parsing pitfalls).
   const visibleRows = useMemo(() => {
-    const crdDate = new Date(crd);
     return rows.filter(
-      (s) => enabledCarriers.has(s.carrier_code) && new Date(s.etd) > crdDate
+      (s) =>
+        enabledCarriers.has(s.carrier_code) &&
+        s.etd.slice(0, 10) >= crd &&
+        !excludedPods.has(s.port_of_discharge)
     );
-  }, [rows, enabledCarriers, crd]);
+  }, [rows, enabledCarriers, crd, excludedPods]);
+
+  // Unique PODs across the full server response — drives the POD filter
+  // dropdown. Sourced from `rows` (not `visibleRows`) so a POD never
+  // vanishes from the option list once you uncheck it.
+  const availablePods = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) set.add(r.port_of_discharge);
+    return Array.from(set).sort();
+  }, [rows]);
+
+  // Floor for the CRD date picker = earliest ETD in the current dataset.
+  // Derived from the full server response (not visibleRows) so the floor
+  // doesn't shift as the user changes CRD itself.
+  const minCrd = useMemo(() => {
+    if (rows.length === 0) return undefined;
+    let earliest = rows[0].etd.slice(0, 10);
+    for (const r of rows) {
+      const d = r.etd.slice(0, 10);
+      if (d < earliest) earliest = d;
+    }
+    return earliest;
+  }, [rows]);
 
   return (
     <div className="flex h-full flex-col bg-bg">
@@ -57,6 +86,7 @@ export function App() {
         onViewModeChange={setViewMode}
         crd={crd}
         onCrdChange={setCrd}
+        minCrd={minCrd}
         enabledCarriers={enabledCarriers}
         onEnabledCarriersChange={setEnabledCarriers}
         onSearch={handleSearch}
@@ -64,7 +94,13 @@ export function App() {
         errorMessage={errorMessage}
       />
 
-      <SchedulesGrid viewMode={viewMode} rows={visibleRows} />
+      <SchedulesGrid
+        viewMode={viewMode}
+        rows={visibleRows}
+        availablePods={availablePods}
+        excludedPods={excludedPods}
+        onExcludedPodsChange={setExcludedPods}
+      />
     </div>
   );
 }
