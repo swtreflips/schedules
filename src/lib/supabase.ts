@@ -32,24 +32,16 @@ export async function findNearbySchedules(
 export { supabase };
 
 /**
- * Fetches every non-null port_of_loading from schedules_latest and returns
- * the deduplicated, alphabetically sorted set. Powers the POL autocomplete.
+ * Returns the deduplicated, alphabetically sorted set of every Port of
+ * Loading present in schedules_latest. Powers the POL autocomplete.
  *
- * Selecting one column keeps the payload small; if/when this gets sluggish
- * at scale, swap to a dedicated `distinct_pols()` Postgres function.
+ * Backed by a Postgres function (distinct_pols) so the DISTINCT happens
+ * server-side. The previous table-query approach silently truncated at
+ * PostgREST's 1000-row default, missing any POL whose rows landed past
+ * that boundary.
  */
 export async function getDistinctPOLs(): Promise<string[]> {
-  const { data, error } = await supabase
-    .from("schedules_latest")
-    .select("port_of_loading")
-    .not("port_of_loading", "is", null);
-
+  const { data, error } = await supabase.rpc("distinct_pols");
   if (error) throw new Error(`Failed to load POL options: ${error.message}`);
-
-  const unique = new Set<string>();
-  for (const row of data ?? []) {
-    const v = (row as { port_of_loading: string | null }).port_of_loading;
-    if (v) unique.add(v);
-  }
-  return [...unique].sort((a, b) => a.localeCompare(b));
+  return (data ?? []) as string[];
 }
