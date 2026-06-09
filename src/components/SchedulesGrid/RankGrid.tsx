@@ -57,7 +57,13 @@ export function RankGrid({
       },
       { headerName: "Carrier", field: "carrier_code", width: 100 },
       { headerName: "POL", field: "port_of_loading", flex: 1, minWidth: 150 },
-      { headerName: "POD", field: "port_of_discharge", flex: 1, minWidth: 150 },
+      {
+        headerName: "POD",
+        field: "port_of_discharge",
+        headerComponent: PodFilter,
+        flex: 1,
+        minWidth: 150,
+      },
       { headerName: "Last CY", field: "last_cy", flex: 1, minWidth: 150 },
       { headerName: "ETD", field: "etd", width: 110 },
       { headerName: "ETA", field: "eta", width: 110 },
@@ -97,6 +103,17 @@ export function RankGrid({
     []
   );
 
+  const gridContext = useMemo(
+    () => ({
+      podFilter: {
+        available: availablePods,
+        excluded: excludedPods,
+        onChange: onExcludedPodsChange,
+      },
+    }),
+    [availablePods, excludedPods, onExcludedPodsChange]
+  );
+
   const handleDownloadCsv = () => {
     const stamp = new Date().toISOString().slice(0, 10);
     gridRef.current?.api.exportDataAsCsv({
@@ -120,11 +137,6 @@ export function RankGrid({
         label={label}
         onDownloadCsv={handleDownloadCsv}
       >
-        <PodFilter
-          available={availablePods}
-          excluded={excludedPods}
-          onChange={onExcludedPodsChange}
-        />
         <div className="sort-toggle" role="group" aria-label="Sort by">
           <span className="sort-toggle__label">sort</span>
           <button
@@ -160,6 +172,7 @@ export function RankGrid({
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
           rowData={rankRows}
+          context={gridContext}
           overlayNoRowsTemplate='<div style="text-align: center;"><div style="font-family: Geist, system-ui, sans-serif; font-size: 15px; font-weight: 500; color: #0A0A0A; margin-bottom: 6px;">No matches yet</div><div style="font-family: Geist Mono, ui-monospace, monospace; font-size: 11px; color: #737373; letter-spacing: 0.02em;">Run a search to see top schedules.</div></div>'
           suppressCellFocus
         />

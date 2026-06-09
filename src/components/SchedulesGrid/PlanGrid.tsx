@@ -93,8 +93,15 @@ export function PlanGrid({
   );
 
   const gridContext = useMemo(
-    () => ({ onSelectAlternative: handleSelectAlternative }),
-    [handleSelectAlternative]
+    () => ({
+      onSelectAlternative: handleSelectAlternative,
+      podFilter: {
+        available: availablePods,
+        excluded: excludedPods,
+        onChange: onExcludedPodsChange,
+      },
+    }),
+    [handleSelectAlternative, availablePods, excludedPods, onExcludedPodsChange]
   );
 
   const columnDefs = useMemo<ColDef<PlanRow>[]>(
@@ -118,7 +125,13 @@ export function PlanGrid({
       },
       { headerName: "Carrier", valueGetter: scheduleField("carrier_code"), width: 100 },
       { headerName: "POL", valueGetter: scheduleField("port_of_loading"), flex: 1, minWidth: 150 },
-      { headerName: "POD", valueGetter: scheduleField("port_of_discharge"), flex: 1, minWidth: 150 },
+      {
+        headerName: "POD",
+        valueGetter: scheduleField("port_of_discharge"),
+        headerComponent: PodFilter,
+        flex: 1,
+        minWidth: 150,
+      },
       { headerName: "Last CY", valueGetter: scheduleField("last_cy"), flex: 1, minWidth: 150 },
       { headerName: "ETD", valueGetter: scheduleField("etd"), width: 110 },
       { headerName: "ETA", valueGetter: scheduleField("eta"), width: 110 },
@@ -199,13 +212,7 @@ export function PlanGrid({
         rowCount={carrierCount}
         label={label}
         onDownloadCsv={handleDownloadCsv}
-      >
-        <PodFilter
-          available={availablePods}
-          excluded={excludedPods}
-          onChange={onExcludedPodsChange}
-        />
-      </GridToolbar>
+      />
       <div className="flex-1 min-h-0">
         <AgGridReact<PlanRow>
           ref={gridRef}
