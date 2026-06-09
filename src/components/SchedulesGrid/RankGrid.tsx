@@ -4,6 +4,7 @@ import { type ColDef } from "ag-grid-community";
 import type { Schedule } from "../../types/schedule";
 import { GridToolbar } from "./GridToolbar";
 import { PodFilter } from "./PodFilter";
+import { SortHeader, type SortKey, type SortDir } from "./SortHeader";
 import { swissTheme } from "./theme";
 
 interface Props {
@@ -15,8 +16,6 @@ interface Props {
 
 const RANK_TOP_N = 20;
 
-type SortKey = "eta" | "etd" | "transit_time_days";
-
 export function RankGrid({
   rows,
   availablePods,
@@ -25,19 +24,27 @@ export function RankGrid({
 }: Props) {
   const gridRef = useRef<AgGridReact<Schedule>>(null);
   const [sortKey, setSortKey] = useState<SortKey>("eta");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   const rankRows = useMemo(() => {
     const sorted = [...rows].sort((a, b) => {
+      let cmp = 0;
       if (sortKey === "transit_time_days") {
-        return a.transit_time_days - b.transit_time_days;
+        cmp = a.transit_time_days - b.transit_time_days;
+      } else if (sortKey === "etd") {
+        cmp = a.etd.localeCompare(b.etd);
+      } else {
+        cmp = a.eta.localeCompare(b.eta);
       }
-      if (sortKey === "etd") {
-        return a.etd.localeCompare(b.etd);
-      }
-      return a.eta.localeCompare(b.eta);
+      return sortDir === "asc" ? cmp : -cmp;
     });
     return sorted.slice(0, RANK_TOP_N);
-  }, [rows, sortKey]);
+  }, [rows, sortKey, sortDir]);
+
+  const handleSortChange = (key: SortKey, dir: SortDir) => {
+    setSortKey(key);
+    setSortDir(dir);
+  };
 
   const columnDefs = useMemo<ColDef<Schedule>[]>(
     () => [
@@ -65,14 +72,28 @@ export function RankGrid({
         minWidth: 150,
       },
       { headerName: "Last CY", field: "last_cy", flex: 1, minWidth: 150 },
-      { headerName: "ETD", field: "etd", width: 110 },
-      { headerName: "ETA", field: "eta", width: 110 },
+      {
+        headerName: "ETD",
+        field: "etd",
+        width: 110,
+        headerComponent: SortHeader,
+        headerComponentParams: { sortField: "etd" satisfies SortKey },
+      },
+      {
+        headerName: "ETA",
+        field: "eta",
+        width: 110,
+        headerComponent: SortHeader,
+        headerComponentParams: { sortField: "eta" satisfies SortKey },
+      },
       { headerName: "POD ETA", field: "pod_eta", width: 110 },
       {
         headerName: "Transit Time",
         field: "transit_time_days",
         width: 110,
         type: "numericColumn",
+        headerComponent: SortHeader,
+        headerComponentParams: { sortField: "transit_time_days" satisfies SortKey },
       },
       { headerName: "Type", field: "transport_type", width: 110 },
       { headerName: "Mother Vessel", field: "mother_vessel", flex: 1.2, minWidth: 170 },
@@ -110,8 +131,13 @@ export function RankGrid({
         excluded: excludedPods,
         onChange: onExcludedPodsChange,
       },
+      sort: {
+        key: sortKey,
+        dir: sortDir,
+        onChange: handleSortChange,
+      },
     }),
-    [availablePods, excludedPods, onExcludedPodsChange]
+    [availablePods, excludedPods, onExcludedPodsChange, sortKey, sortDir]
   );
 
   const handleDownloadCsv = () => {
@@ -136,35 +162,7 @@ export function RankGrid({
         rowCount={shownCount}
         label={label}
         onDownloadCsv={handleDownloadCsv}
-      >
-        <div className="sort-toggle" role="group" aria-label="Sort by">
-          <span className="sort-toggle__label">sort</span>
-          <button
-            type="button"
-            className={`sort-toggle__tab${sortKey === "eta" ? " sort-toggle__tab--active" : ""}`}
-            onClick={() => setSortKey("eta")}
-            aria-pressed={sortKey === "eta"}
-          >
-            ETA
-          </button>
-          <button
-            type="button"
-            className={`sort-toggle__tab${sortKey === "etd" ? " sort-toggle__tab--active" : ""}`}
-            onClick={() => setSortKey("etd")}
-            aria-pressed={sortKey === "etd"}
-          >
-            ETD
-          </button>
-          <button
-            type="button"
-            className={`sort-toggle__tab${sortKey === "transit_time_days" ? " sort-toggle__tab--active" : ""}`}
-            onClick={() => setSortKey("transit_time_days")}
-            aria-pressed={sortKey === "transit_time_days"}
-          >
-            Transit
-          </button>
-        </div>
-      </GridToolbar>
+      />
       <div className="flex-1 min-h-0">
         <AgGridReact<Schedule>
           ref={gridRef}
