@@ -1,17 +1,27 @@
-import { useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { AgGridReact } from "ag-grid-react";
 import { type ColDef } from "ag-grid-community";
 import type { Schedule } from "../../types/schedule";
 import { GridToolbar } from "./GridToolbar";
 import { PodFilter } from "./PodFilter";
+import { PodFilterPopover } from "./PodFilterPopover";
 import { SortHeader, type SortKey, type SortDir } from "./SortHeader";
+import { SortMenu } from "./SortMenu";
 import { swissTheme } from "./theme";
 
 interface Props {
   rows: Schedule[];
   availablePods: string[];
   excludedPods: Set<string>;
-  onExcludedPodsChange: (next: Set<string>) => void;
+  onExcludedPodsChange: Dispatch<SetStateAction<Set<string>>>;
 }
 
 const RANK_TOP_N = 20;
@@ -25,6 +35,56 @@ export function RankGrid({
   const gridRef = useRef<AgGridReact<Schedule>>(null);
   const [sortKey, setSortKey] = useState<SortKey>("eta");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [podPopoverAnchor, setPodPopoverAnchor] = useState<DOMRect | null>(null);
+  const [sortMenu, setSortMenu] = useState<{ field: SortKey; anchor: DOMRect } | null>(null);
+
+  // AG Grid React doesn't propagate `context` changes into mounted
+  // custom header components. Force header recreation when the data
+  // backing the header labels/indicators changes.
+  useEffect(() => {
+    gridRef.current?.api?.refreshHeader();
+  }, [excludedPods, sortKey, sortDir]);
+
+  const togglePod = useCallback(
+    (pod: string) => {
+      onExcludedPodsChange((prev) => {
+        const next = new Set(prev);
+        if (next.has(pod)) next.delete(pod);
+        else next.add(pod);
+        return next;
+      });
+    },
+    [onExcludedPodsChange]
+  );
+
+  const selectAllPods = useCallback(
+    () => onExcludedPodsChange(new Set()),
+    [onExcludedPodsChange]
+  );
+
+  const selectNonePods = useCallback(
+    () => onExcludedPodsChange(new Set(availablePods)),
+    [onExcludedPodsChange, availablePods]
+  );
+
+  const closePodPopover = useCallback(() => setPodPopoverAnchor(null), []);
+
+  const openSortMenu = useCallback(
+    (field: SortKey, anchor: DOMRect) => setSortMenu({ field, anchor }),
+    []
+  );
+
+  const closeSortMenu = useCallback(() => setSortMenu(null), []);
+
+  const pickSort = useCallback(
+    (dir: SortDir) => {
+      if (!sortMenu) return;
+      setSortKey(sortMenu.field);
+      setSortDir(dir);
+      setSortMenu(null);
+    },
+    [sortMenu]
+  );
 
   const rankRows = useMemo(() => {
     const sorted = [...rows].sort((a, b) => {
@@ -40,11 +100,6 @@ export function RankGrid({
     });
     return sorted.slice(0, RANK_TOP_N);
   }, [rows, sortKey, sortDir]);
-
-  const handleSortChange = (key: SortKey, dir: SortDir) => {
-    setSortKey(key);
-    setSortDir(dir);
-  };
 
   const columnDefs = useMemo<ColDef<Schedule>[]>(
     () => [
@@ -129,15 +184,15 @@ export function RankGrid({
       podFilter: {
         available: availablePods,
         excluded: excludedPods,
-        onChange: onExcludedPodsChange,
+        onOpen: setPodPopoverAnchor,
       },
       sort: {
         key: sortKey,
         dir: sortDir,
-        onChange: handleSortChange,
+        onOpen: openSortMenu,
       },
     }),
-    [availablePods, excludedPods, onExcludedPodsChange, sortKey, sortDir]
+    [availablePods, excludedPods, sortKey, sortDir, openSortMenu]
   );
 
   const handleDownloadCsv = () => {
@@ -175,6 +230,25 @@ export function RankGrid({
           suppressCellFocus
         />
       </div>
+      {podPopoverAnchor && (
+        <PodFilterPopover
+          available={availablePods}
+          excluded={excludedPods}
+          anchor={podPopoverAnchor}
+          onTogglePod={togglePod}
+          onSelectAll={selectAllPods}
+          onSelectNone={selectNonePods}
+          onClose={closePodPopover}
+        />
+      )}
+      {sortMenu && (
+        <SortMenu
+          anchor={sortMenu.anchor}
+          activeDir={sortKey === sortMenu.field ? sortDir : null}
+          onPick={pickSort}
+          onClose={closeSortMenu}
+        />
+      )}
     </>
   );
 }

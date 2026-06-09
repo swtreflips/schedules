@@ -1,3 +1,4 @@
+import type { Dispatch, SetStateAction } from "react";
 import { ModuleRegistry, AllCommunityModule } from "ag-grid-community";
 import type { Schedule } from "../../types/schedule";
 import type { ViewMode } from "../../types/view";
@@ -11,7 +12,7 @@ interface Props {
   rows: Schedule[];
   availablePods: string[];
   excludedPods: Set<string>;
-  onExcludedPodsChange: (next: Set<string>) => void;
+  onExcludedPodsChange: Dispatch<SetStateAction<Set<string>>>;
 }
 
 export function SchedulesGrid({

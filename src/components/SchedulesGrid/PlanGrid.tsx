@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { AgGridReact } from "ag-grid-react";
 import {
   type ColDef,
@@ -14,13 +22,14 @@ import {
 import { GridToolbar } from "./GridToolbar";
 import { AlternativesRow } from "./AlternativesRow";
 import { PodFilter } from "./PodFilter";
+import { PodFilterPopover } from "./PodFilterPopover";
 import { swissTheme } from "./theme";
 
 interface Props {
   rows: Schedule[];
   availablePods: string[];
   excludedPods: Set<string>;
-  onExcludedPodsChange: (next: Set<string>) => void;
+  onExcludedPodsChange: Dispatch<SetStateAction<Set<string>>>;
 }
 
 const ALT_ITEM_HEIGHT = 32;
@@ -49,11 +58,45 @@ export function PlanGrid({
   const gridRef = useRef<AgGridReact<PlanRow>>(null);
   const [selections, setSelections] = useState<Map<string, string>>(new Map());
   const [expansions, setExpansions] = useState<Set<string>>(new Set());
+  const [podPopoverAnchor, setPodPopoverAnchor] = useState<DOMRect | null>(null);
 
   useEffect(() => {
     setSelections(new Map());
     setExpansions(new Set());
+    setPodPopoverAnchor(null);
   }, [rows]);
+
+  // AG Grid React doesn't propagate `context` changes into already-
+  // mounted custom header components, so the POD trigger's label
+  // (count + accent state) would otherwise read stale data. Force
+  // header recreation whenever the excluded set changes.
+  useEffect(() => {
+    gridRef.current?.api?.refreshHeader();
+  }, [excludedPods]);
+
+  const togglePod = useCallback(
+    (pod: string) => {
+      onExcludedPodsChange((prev) => {
+        const next = new Set(prev);
+        if (next.has(pod)) next.delete(pod);
+        else next.add(pod);
+        return next;
+      });
+    },
+    [onExcludedPodsChange]
+  );
+
+  const selectAllPods = useCallback(
+    () => onExcludedPodsChange(new Set()),
+    [onExcludedPodsChange]
+  );
+
+  const selectNonePods = useCallback(
+    () => onExcludedPodsChange(new Set(availablePods)),
+    [onExcludedPodsChange, availablePods]
+  );
+
+  const closePodPopover = useCallback(() => setPodPopoverAnchor(null), []);
 
   const groups = useMemo(() => groupByCarrier(rows), [rows]);
   const planRows = useMemo(
@@ -98,10 +141,10 @@ export function PlanGrid({
       podFilter: {
         available: availablePods,
         excluded: excludedPods,
-        onChange: onExcludedPodsChange,
+        onOpen: setPodPopoverAnchor,
       },
     }),
-    [handleSelectAlternative, availablePods, excludedPods, onExcludedPodsChange]
+    [handleSelectAlternative, availablePods, excludedPods]
   );
 
   const columnDefs = useMemo<ColDef<PlanRow>[]>(
@@ -230,6 +273,17 @@ export function PlanGrid({
           suppressCellFocus
         />
       </div>
+      {podPopoverAnchor && (
+        <PodFilterPopover
+          available={availablePods}
+          excluded={excludedPods}
+          anchor={podPopoverAnchor}
+          onTogglePod={togglePod}
+          onSelectAll={selectAllPods}
+          onSelectNone={selectNonePods}
+          onClose={closePodPopover}
+        />
+      )}
     </>
   );
 }
