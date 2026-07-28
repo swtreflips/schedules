@@ -22,3 +22,7 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# every .env variant, including backups from the rates migration
+.env.*
+!.env.example
