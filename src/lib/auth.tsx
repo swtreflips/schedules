@@ -34,7 +34,7 @@ interface AuthState {
   session: Session | null;
   profile: Profile | null | undefined;
   loading: boolean;
-  signInWithGoogle: () => Promise<void>;
+  signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -85,11 +85,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [session?.user?.id]);
 
-  const signInWithGoogle = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: window.location.origin },
-    });
+  // Email/password, matching RatesApp's signInWithPassword. No OAuth provider is
+  // configured on purpose: this organisation runs on Microsoft, not Google, so a Google
+  // button would have internal staff signing in with PERSONAL accounts. It would also make
+  // the sign-in a public front door, where only the "disable signups" setting stands
+  // between a stranger and a role='authenticated' token — which is exactly what the geo
+  // brain accepts. With password sign-in and no self-registration there is no public path
+  // at all. Entra/Azure OAuth is the upgrade when the hub arrives, since Cloudflare Access
+  // can federate the same directory.
+  const signIn = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw new Error(error.message);
   };
 
@@ -98,9 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider
-      value={{ session, profile, loading, signInWithGoogle, signOut }}
-    >
+    <AuthContext.Provider value={{ session, profile, loading, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );

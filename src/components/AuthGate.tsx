@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { useAuth } from "../lib/auth";
 
 /**
@@ -27,8 +27,61 @@ function Centered({ children }: { children: ReactNode }) {
   );
 }
 
+function SignInForm({
+  onSubmit,
+}: {
+  onSubmit: (email: string, password: string) => Promise<void>;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handle = async (e: FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit(email, password);
+      // No success branch needed: onAuthStateChange updates the session and this
+      // component unmounts.
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handle} className="flex w-full max-w-xs flex-col gap-3">
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="Email"
+        autoComplete="username"
+        required
+        className="border border-rule bg-panel px-3 py-2 text-sm text-ink outline-none focus:border-rule-strong"
+      />
+      <input
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder="Password"
+        autoComplete="current-password"
+        required
+        className="border border-rule bg-panel px-3 py-2 text-sm text-ink outline-none focus:border-rule-strong"
+      />
+      <button type="submit" disabled={submitting} className="search-button">
+        {submitting ? "Signing in…" : "Sign in"}
+      </button>
+      {error && <p className="text-xs text-accent">{error}</p>}
+    </form>
+  );
+}
+
 export function AuthGate({ children }: { children: ReactNode }) {
-  const { session, profile, loading, signInWithGoogle, signOut } = useAuth();
+  const { session, profile, loading, signIn, signOut } = useAuth();
 
   if (loading || profile === undefined) {
     return <Centered><p className="text-sm text-muted">Loading…</p></Centered>;
@@ -37,12 +90,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (!session) {
     return (
       <Centered>
-        <button type="button" onClick={signInWithGoogle} className="search-button">
-          Sign in with Google
-        </button>
+        <SignInForm onSubmit={signIn} />
         <p className="max-w-xs text-center text-xs text-faint">
-          Internal tool. Accounts are created by an administrator — signing in does not
-          create one.
+          Internal tool. Accounts are created by an administrator — there is no
+          self-registration.
         </p>
       </Centered>
     );
