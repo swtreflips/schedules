@@ -33,12 +33,12 @@ The last two happen **client-side** in React (instant filtering on already-fetch
 | Piece | Where | Status | Responsibility |
 |---|---|---|---|
 | React shell | Vercel (`*.vercel.app`) | ✅ deployed | UI, state, orchestration, last-mile filtering, grid grouping |
-| Geocoder | Render (`https://geoapi-1cu6.onrender.com`) | ✅ deployed | Text → coordinates, cache-first via Supabase |
+| Geocoder | geoapi-next on Vercel (`https://geoapi-next.vercel.app`) | ✅ deployed | Text → coordinates, cache-first via Supabase |
 | Geocode cache | Supabase `geocode_cache` table | ✅ deployed | First-write storage for resolved coordinates |
-| Schedules DB | Supabase `schedules` + `ports` tables, PostGIS-enabled | ✅ deployed (data loaded) | Schedule rows with `last_cy_geom`, port reference data |
-| Schedules RPC | Supabase `nearby_schedules` function | ❌ **needs to be created** | Single endpoint React calls for filtered schedules |
+| Schedules DB | Supabase `schedules` + `world_ports`, PostGIS-enabled | ✅ deployed | Schedule rows with `last_cy_geom`; `ports` was renamed `world_ports` |
+| Schedules RPC | Supabase `nearby_schedules` function | ✅ deployed | Reads `schedules_latest_secure`; internal-only via RLS |
 
-Two of these (React, geocoder) are deployed. Supabase is loaded with data. The missing piece is **one PostgreSQL function** that does the AND of POL match + geographic radius check.
+All pieces are deployed. The schedules tables moved into the shared rates Supabase project — see `RatesApp/MIGRATION.md` for what changed and why.
 
 ---
 
@@ -55,9 +55,9 @@ When the user clicks Search:
     enabledCarriers = { MSC, MAE, COS, HPL, ONE, ... }
     radiusMiles     = 100   (default; future control)
 
-[2] React → GeoAPI on Render
+[2] React → the geo brain (geoapi-next)
     ────────────────────────────────────────────
-    GET https://geoapi-1cu6.onrender.com/geocode?q=Hialeah,%20FL
+    GET https://geoapi-next.vercel.app/api/geocode?q=Hialeah,%20FL
 
     GeoAPI checks Supabase geocode_cache:
       - hit  → return cached row immediately
@@ -106,9 +106,20 @@ Two network calls per search: geocode (~50ms cached, ~1s miss) + RPC (~50–200m
 
 ## What needs to be set up
 
-### A. Supabase: create the `nearby_schedules` RPC
+### A. Supabase: the `nearby_schedules` RPC — ✅ already deployed
 
-Run this once in the Supabase SQL Editor. It's the only missing server-side piece:
+> **Do not run the SQL below as written.** It exists now, defined in
+> `RatesApp/supabase/migrations/`, with two differences that matter:
+>
+> * it reads **`schedules_latest_secure`**, not `schedules` — the guarded view, so a
+>   non-internal caller gets zero rows instead of `permission denied`
+> * **`anon` has no EXECUTE.** The grant below was revoked; the app signs in, so its callers
+>   are `authenticated`
+>
+> Kept for the reasoning, not as an instruction. Schema changes go through a migration and
+> `supabase db push` — never the SQL Editor, or the next `db reset` silently loses them.
+
+The original, for reference:
 
 ```sql
 create or replace function nearby_schedules(
@@ -145,27 +156,31 @@ grant execute on function nearby_schedules(text, double precision, double precis
 
 ### B. Supabase: row-level security (RLS) on `schedules`
 
-The React app authenticates as the **anon** role (publishable key). For that role to read `schedules`, you need either:
+> ⚠️ **This section previously said to grant `anon` read on `schedules`, or to leave RLS off.
+> Do not do either.** That advice was written when these tables lived alone in a project only
+> internal people held keys to — the *project* was the boundary. They now sit in the shared
+> rates project, where `authenticated` includes forwarders and the anon key ships in every
+> RatesApp bundle. Granting `anon` there publishes the warehouse to anyone who opens DevTools.
+
+Already applied, in `RatesApp/supabase/migrations/20260727140000_schedules_rls.sql`:
 
 ```sql
--- Option 1: enable RLS, allow anon read
-alter table schedules enable row level security;
-create policy "anon can read schedules"
-  on schedules for select
-  to anon
-  using (true);
+-- anon gets NOTHING. The app signs in, so its callers are `authenticated`.
+grant select on schedules to authenticated;
+
+create policy schedules_internal_read on schedules
+  for select to authenticated using (my_org_type() = 'internal');
 ```
 
-Or, if you don't want RLS on this table at all (it's not user-sensitive data):
+Two layers, both required: **RLS narrows a grant, it cannot create one.** Without the grant,
+internal users see an empty table and it looks like missing data.
 
-```sql
--- Option 2: just grant select to anon, leave RLS off
-grant select on schedules to anon;
-```
+`schedules_latest` is a **materialized view, and Postgres refuses a policy on one** — so it is
+locked and reached only through `schedules_latest_secure`, a plain view that runs with owner
+rights while its `WHERE` evaluates the caller's `my_org_type()`.
 
-Same answer applies to `geocode_cache` — though GeoAPI uses the service_role key from Render, not the anon key, so it's already covered.
-
-Check current state in Supabase dashboard → Authentication → Policies. Pick one approach and apply.
+The React app therefore needs a signed-in user with `profiles.role = 'internal'`. A forwarder
+account authenticates fine and sees zero rows — by design.
 
 ### C. Supabase: CORS allow-list
 
@@ -179,26 +194,36 @@ http://localhost:5173                    ← Vite dev server
 
 Without this, the browser blocks the `supabase.rpc()` call.
 
-### D. GeoAPI: CORS allow-list
+### D. The geo brain: CORS allow-list
 
-The FastAPI service at `https://geoapi-1cu6.onrender.com` needs the same Vercel + localhost origins. Currently in [api/app.py](../api/app.py) there's no `CORSMiddleware` — the React app will get a CORS error on the first `/geocode` call from the browser. Add this to `api/app.py` and redeploy on Render:
+Geocoding goes through **geoapi-next**, the shared geo brain, not the old Render FastAPI
+service. That service is retired — its repo lives on at `swtreflips/geoapi` but nothing calls
+it.
 
-```python
-from fastapi.middleware.cors import CORSMiddleware
+The brain keeps its allowlist in a single environment variable rather than in code, so adding
+an origin is a config change, not a deploy of new source:
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://schedules-<your-hash>.vercel.app",
-        # any custom domain you map later
-    ],
-    allow_methods=["GET"],
-    allow_headers=["*"],
-)
+```
+ALLOWED_ORIGINS=https://rates-app-fawn.vercel.app,http://localhost:5173,https://schedules-dusky.vercel.app
 ```
 
-This is a change to the `swtreflips/geoapi` repo, not the React repo. Commit there, push, Render auto-redeploys.
+Exact strings — scheme included, no trailing slash, no path. An origin that does not match
+character-for-character gets **no `Access-Control-Allow-Origin` header at all**, which is
+invisible in the status code: the preflight still returns `204` carrying every *other* CORS
+header, and the browser reports only "Failed to fetch".
+
+**Environment variables bind to a Vercel deployment when it is created**, so editing this
+changes nothing until geoapi-next redeploys. To check which allowlist is actually live:
+
+```bash
+curl -s https://geoapi-next.vercel.app/api/healthz
+# {"status":"ok","config":{...,"allowed_origin_count":3}}
+```
+
+The count is the fastest way to tell a stale deployment from a bad value — no browser needed.
+
+Note the brain also requires a **Supabase access token** on every call, so a signed-out user
+cannot geocode at all. `src/lib/geoapi.ts` attaches it per request.
 
 ### E. React: install dependencies
 
@@ -217,7 +242,7 @@ Three values, set in **two places** (see [VITE.md](VITE.md) for the mechanics).
 
 | Variable | Value | Local | Vercel |
 |---|---|---|---|
-| `VITE_GEOAPI_URL` | `https://geoapi-1cu6.onrender.com` | `.env.local` | dashboard → Settings → Env Vars |
+| `VITE_GEOAPI_URL` | `https://geoapi-next.vercel.app` | `.env.local` | dashboard → Settings → Env Vars |
 | `VITE_SUPABASE_URL` | `https://jnuigkggmynerrbxvkzy.supabase.co` | `.env.local` | dashboard |
 | `VITE_SUPABASE_ANON_KEY` | the anon (publishable) key from Supabase dashboard → API | `.env.local` | dashboard |
 
@@ -594,7 +619,7 @@ Before you flip the production switch on the live `*.vercel.app` URL:
 - [ ] `nearby_schedules` RPC exists and is callable from the Supabase SQL Editor's "Function tester"
 - [ ] `anon` role can `select` from `schedules` (test by running a query with the anon key from `curl` or Supabase REST tab)
 - [ ] Supabase CORS allows your Vercel domain + `http://localhost:5173`
-- [ ] GeoAPI on Render has `CORSMiddleware` deployed with your Vercel domain in `allow_origins`
+- [ ] geoapi-next has your Vercel domain in `ALLOWED_ORIGINS` **and has been redeployed** — verify with `curl -s https://geoapi-next.vercel.app/api/healthz` (`allowed_origin_count`)
 - [ ] `VITE_GEOAPI_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` set on Vercel for **Production** + **Preview** + **Development**
 - [ ] A fresh deploy after setting env vars (they don't apply retroactively)
 - [ ] Manual end-to-end test: POL = "Laem Chabang, Thailand", Dest = "Hialeah, FL", CRD = tomorrow, all carriers enabled → grid shows at least one row

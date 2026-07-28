@@ -20,7 +20,7 @@ SUPABASE_KEY       ───────►   (never reaches the browser)
 PORT=3000          ───────►   (never reaches the browser)
 ```
 
-When you run `npm run build`, Vite inlines every `VITE_*` value as a string literal in the output JS. So `import.meta.env.VITE_GEOAPI_URL` becomes the literal string `"https://geoapi-1cu6.onrender.com"` in the bundle that ships to users.
+When you run `npm run build`, Vite inlines every `VITE_*` value as a string literal in the output JS. So `import.meta.env.VITE_GEOAPI_URL` becomes the literal string `"https://geoapi-next.vercel.app"` in the bundle that ships to users.
 
 ---
 
@@ -72,7 +72,7 @@ This app's three planned env vars are all safe-for-client:
 
 | Variable | What | Why public is OK |
 |---|---|---|
-| `VITE_GEOAPI_URL` | Render URL for the geocoder | It's a public service URL |
+| `VITE_GEOAPI_URL` | the shared geo brain (geoapi-next) | It's a public service URL |
 | `VITE_SUPABASE_URL` | Supabase project URL | Public by design |
 | `VITE_SUPABASE_ANON_KEY` | Supabase publishable key | Designed for client use; RLS protects the data |
 
@@ -84,7 +84,7 @@ Create a `.env.local` file in the `React/` folder root (next to `package.json`).
 
 ```bash
 # React/.env.local
-VITE_GEOAPI_URL=https://geoapi-1cu6.onrender.com
+VITE_GEOAPI_URL=https://geoapi-next.vercel.app
 VITE_SUPABASE_URL=https://jnuigkggmynerrbxvkzy.supabase.co
 VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIs...
 ```
@@ -120,7 +120,7 @@ Vercel has three "environments" for env vars, each independent:
 1. Vercel dashboard → your project → **Settings** → **Environment Variables**
 2. Click **Add New**
 3. Name: `VITE_GEOAPI_URL` (case-sensitive, including the `VITE_` prefix)
-4. Value: `https://geoapi-1cu6.onrender.com`
+4. Value: `https://geoapi-next.vercel.app`
 5. Environments: check **Production**, **Preview**, **Development** (usually all three for safe-for-client values)
 6. Save
 
