@@ -34,7 +34,8 @@
   --color-faint: #97918a;     /* linen fog-400 */
   --color-rule: #dad7d3;      /* linen fog-200  — warm hairline */
   --color-rule-strong: #112424;
-  --color-accent: #ad552a;    /* linen signal-600 — 5.11:1 as text */
+  --color-accent: #107ca6;        /* MODULE ACCENT: harbour blue — 4.71:1 as text on white */
+  --color-accent-strong: #0c6587;  /* the hover/pressed step */
 
   --font-sans: "DM Sans", system-ui, sans-serif;
   --font-mono: "DM Mono", ui-monospace, monospace;
@@ -198,13 +199,14 @@ input[type="number"] {
 }
 
 .carrier-chip--active {
-  background: var(--color-ink);
+  background: var(--color-accent);
   color: var(--color-bg);
-  border-color: var(--color-ink);
+  border-color: var(--color-accent);
 }
 
 .carrier-chip--active:hover {
-  background: var(--color-secondary);
+  background: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
 }
 
 .carrier-chip--inactive {
@@ -255,12 +257,12 @@ input[type="number"] {
 }
 
 .combobox-option--selected {
-  background: var(--color-ink);
+  background: var(--color-accent);
   color: var(--color-bg);
 }
 
 .combobox-option--selected:hover {
-  background: var(--color-secondary);
+  background: var(--color-accent-strong);
 }
 
 .combobox-empty {
@@ -309,14 +311,14 @@ input[type="number"] {
 }
 
 .alt-item--selected {
-  background: var(--color-ink);
+  background: var(--color-accent);
   color: var(--color-bg);
-  border-color: var(--color-ink);
+  border-color: var(--color-accent);
 }
 
 .alt-item--selected:hover {
-  background: var(--color-secondary);
-  border-color: var(--color-secondary);
+  background: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
 }
 
 .alt-label {
@@ -429,7 +431,7 @@ input[type="number"] {
 }
 
 .view-toggle__tab--active {
-  background: var(--color-ink);
+  background: var(--color-accent);
   color: var(--color-bg);
 }
 
@@ -444,8 +446,8 @@ input[type="number"] {
   justify-content: center;
   height: 30px;
   padding: 0 18px;
-  border: 1px solid var(--color-ink);
-  background: var(--color-ink);
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
   color: var(--color-bg);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -460,8 +462,8 @@ input[type="number"] {
 }
 
 .search-button:hover:not(:disabled) {
-  background: var(--color-secondary);
-  border-color: var(--color-secondary);
+  background: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
 }
 
 .search-button:disabled {
@@ -578,8 +580,8 @@ input[type="number"] {
 }
 
 .pod-filter__option input[type="checkbox"]:checked {
-  background: var(--color-ink);
-  border-color: var(--color-ink);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 .pod-filter__option input[type="checkbox"]:checked::after {
