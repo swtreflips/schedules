@@ -1,18 +1,43 @@
 @import "tailwindcss";
 
-@theme {
-  --color-bg: #ffffff;
-  --color-panel: #fafafa;
-  --color-ink: #0a0a0a;
-  --color-secondary: #404040;
-  --color-muted: #737373;
-  --color-faint: #a3a3a3;
-  --color-rule: #e5e5e5;
-  --color-rule-strong: #0a0a0a;
-  --color-accent: #dc2626;
+/*
+  SKIN: linen — the shared platform look, mapped onto this app's semantic tokens.
 
-  --font-sans: "Geist", system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
+  Schedules does not use colour ramps; it has nine named roles and every rule in this file
+  flows from them. So adopting the platform skin is a MAPPING, not a copy — the shared values
+  come from RatesApp's public/skins/linen.css and land on the role each one plays here.
+
+  TWO ROLES NEEDED THE DARKER STEP, because this app uses colour differently:
+
+  `--color-accent` is TEXT here (.accent-mark, active sort and POD headers, hover states),
+  where in RatesApp the same accent is a button FILL. linen's signal-500 is tuned to be light
+  enough for near-black text on top of it, which makes it 3.47:1 as text on white — a fail.
+  signal-600 is the same hue one step down, 5.11:1, and is what this app takes.
+
+  `--color-muted` likewise takes fog-500 (4.97:1), not fog-400. The previous #737373 was
+  4.74:1 and passed; #a3a3a3 for faint was 2.54:1 and did not. faint is now fog-400 at
+  3.12:1 — still short of 4.5:1, but it is placeholder and separator decoration rather than
+  content, and it is a real improvement on what was there.
+
+  WHAT IS DELIBERATELY NOT ADOPTED: linen's generous radii and slow motion. This app is built
+  on --radius-none and 0.12s transitions, and its whole character is squared-off and immediate.
+  Forcing rounded corners and 340ms easing here would not be applying a skin, it would be
+  overwriting a design. Shared base, per-module character — the palette and type carry the
+  family resemblance; density and pace stay local.
+*/
+@theme {
+  --color-bg: #ffffff;        /* data surfaces stay pure — this is a reading tool */
+  --color-panel: #f7f7f5;     /* linen fog-50  — warm secondary surface */
+  --color-ink: #112424;       /* linen harbor-950 — deep warm green-black, not pure black */
+  --color-secondary: #3d6868; /* linen harbor-700 */
+  --color-muted: #756f67;     /* linen fog-500  — 4.97:1 on white */
+  --color-faint: #97918a;     /* linen fog-400 */
+  --color-rule: #dad7d3;      /* linen fog-200  — warm hairline */
+  --color-rule-strong: #112424;
+  --color-accent: #ad552a;    /* linen signal-600 — 5.11:1 as text */
+
+  --font-sans: "DM Sans", system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, monospace;
 
   --radius-none: 0;
 }
