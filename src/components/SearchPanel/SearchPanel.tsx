@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { PortOfLoadingField } from "./PortOfLoadingField";
 import { FinalDestinationField } from "./FinalDestinationField";
+import { usePOLLastCYOptions } from "../../state/usePOLLastCYOptions";
 import { CRDField } from "./CRDField";
 import { RadiusField } from "./RadiusField";
 import { SearchButton } from "./SearchButton";
@@ -41,6 +42,8 @@ export function SearchPanel({
   const [destination, setDestination] = useState("");
   const [radius, setRadius] = useState(DEFAULT_RADIUS_MILES);
 
+  const { polOptions, lastCYOptions, loading } = usePOLLastCYOptions(pol, destination);
+
   const canSubmit =
     pol.trim().length > 0 &&
     destination.trim().length > 0 &&
@@ -63,10 +66,17 @@ export function SearchPanel({
       <div className="flex flex-wrap items-start justify-between gap-x-10 gap-y-4">
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-start gap-x-6 gap-y-4">
-            <PortOfLoadingField value={pol} onChange={setPol} />
+            <PortOfLoadingField
+              value={pol}
+              onChange={setPol}
+              options={polOptions}
+              loading={loading}
+            />
             <FinalDestinationField
               value={destination}
               onChange={setDestination}
+              options={lastCYOptions}
+              loading={loading}
             />
             <CRDField value={crd} onChange={onCrdChange} min={minCrd} />
             <RadiusField value={radius} onChange={setRadius} />

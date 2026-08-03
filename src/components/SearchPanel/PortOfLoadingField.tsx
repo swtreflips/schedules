@@ -1,16 +1,16 @@
 import { useId, useMemo, useState } from "react";
-import { usePOLOptions } from "../../state/usePOLOptions";
 
 interface Props {
   value: string;
   onChange: (next: string) => void;
+  options: string[];
+  loading: boolean;
 }
 
-export function PortOfLoadingField({ value, onChange }: Props) {
+export function PortOfLoadingField({ value, onChange, options, loading }: Props) {
   const id = useId();
   const listboxId = `${id}-listbox`;
   const [open, setOpen] = useState(false);
-  const { options, loading } = usePOLOptions();
 
   const filtered = useMemo(() => {
     if (!value.trim()) return options;
@@ -79,8 +79,6 @@ export function PortOfLoadingField({ value, onChange }: Props) {
                 "combobox-option " +
                 (opt === value ? "combobox-option--selected" : "")
               }
-              // mousedown + preventDefault so the input doesn't blur before
-              // we apply the selection
               onMouseDown={(e) => {
                 e.preventDefault();
                 handleSelect(opt);

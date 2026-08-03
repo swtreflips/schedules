@@ -31,17 +31,18 @@ export async function findNearbySchedules(
 
 export { supabase };
 
+export interface POLLastCYPair {
+  pol: string;
+  last_cy: string;
+}
+
 /**
- * Returns the deduplicated, alphabetically sorted set of every Port of
- * Loading present in schedules_latest. Powers the POL autocomplete.
- *
- * Backed by a Postgres function (distinct_pols) so the DISTINCT happens
- * server-side. The previous table-query approach silently truncated at
- * PostgREST's 1000-row default, missing any POL whose rows landed past
- * that boundary.
+ * Returns every unique (pol, last_cy) combination from schedules_latest.
+ * One upfront fetch powers both autocomplete fields and all cross-filtering
+ * client-side — no per-keystroke round-trips needed.
  */
-export async function getDistinctPOLs(): Promise<string[]> {
-  const { data, error } = await supabase.rpc("distinct_pols");
-  if (error) throw new Error(`Failed to load POL options: ${error.message}`);
-  return (data ?? []) as string[];
+export async function getDistinctPOLLastCYPairs(): Promise<POLLastCYPair[]> {
+  const { data, error } = await supabase.rpc("distinct_pol_lastcy_pairs");
+  if (error) throw new Error(`Failed to load POL/Last CY pairs: ${error.message}`);
+  return (data ?? []) as POLLastCYPair[];
 }
