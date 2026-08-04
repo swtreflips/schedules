@@ -28,6 +28,8 @@ export interface Profile {
   id: string;
   role: string;
   full_name: string | null;
+  /** Still on the temporary password issued at onboarding. Drives a banner only. */
+  must_change_password: boolean;
 }
 
 interface AuthState {
@@ -36,6 +38,8 @@ interface AuthState {
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Re-read the profile — used after a password change clears must_change_password. */
+  refreshProfile: () => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -44,6 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const [profileNonce, setProfileNonce] = useState(0);
 
   useEffect(() => {
     supabase.auth
@@ -71,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     supabase
       .from("profiles")
-      .select("id, role, full_name")
+      .select("id, role, full_name, must_change_password")
       .eq("id", uid)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -83,7 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [session?.user?.id]);
+  }, [session?.user?.id, profileNonce]);
 
   // Email/password, matching RatesApp's signInWithPassword. No OAuth provider is
   // configured on purpose: this organisation runs on Microsoft, not Google, so a Google
@@ -103,7 +108,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ session, profile, loading, signIn, signOut }}>
+    <AuthContext.Provider
+      value={{
+        session,
+        profile,
+        loading,
+        signIn,
+        signOut,
+        refreshProfile: () => setProfileNonce((n) => n + 1),
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

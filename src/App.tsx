@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { AccountMenu } from "./components/AccountMenu";
+import { useAuth } from "./lib/auth";
 import { SearchPanel } from "./components/SearchPanel/SearchPanel";
 import { SchedulesGrid } from "./components/SchedulesGrid/SchedulesGrid";
 import { searchSchedules, type SearchParams } from "./state/searchSchedules";
@@ -9,6 +11,26 @@ import type { ViewMode } from "./types/view";
 const todayString = () => new Date().toISOString().slice(0, 10);
 
 export type SearchStatus = "idle" | "loading" | "error";
+
+/**
+ * Still on the password internal read out at onboarding.
+ *
+ * Left alone, a temporary password becomes a permanent one — nobody remembers months later which
+ * accounts were handed over and never changed. Persistent rather than dismissable for that
+ * reason, and it never blocks the grid: someone mid-search should not be stopped from working to
+ * deal with an account chore. Clearing it lives behind the account menu, one click away.
+ */
+function TempPasswordBanner() {
+  const { profile } = useAuth();
+  if (!profile?.must_change_password) return null;
+
+  return (
+    <div className="border-y border-rule bg-panel px-8 py-2 text-xs text-secondary">
+      You are still using the temporary password you were given — set one only you know under
+      Settings, top right.
+    </div>
+  );
+}
 
 export function App() {
   const [viewMode, setViewMode] = useState<ViewMode>("carrier");
@@ -75,11 +97,14 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="px-8 pt-3 pb-2">
+      <header className="flex items-center justify-between px-8 pt-3 pb-2">
         <h1 className="text-[22px] font-medium leading-none tracking-[-0.02em] text-ink">
           Schedules<span className="accent-mark">.</span>
         </h1>
+        <AccountMenu />
       </header>
+
+      <TempPasswordBanner />
 
       <SearchPanel
         viewMode={viewMode}
