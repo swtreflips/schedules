@@ -103,8 +103,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw new Error(error.message);
   };
 
+  /**
+   * Sign out of THIS app only.
+   *
+   * supabase-js defaults to `{ scope: 'global' }`, which revokes every refresh token the user
+   * holds. Schedules, RatesApp and the Stuffer Planner all point at the same Supabase project, so
+   * the default meant signing out here silently ended the other two — in open tabs and on other
+   * devices. The three apps sit on different origins and therefore already keep separate sessions;
+   * sign-out should behave the same way.
+   *
+   * Revisit if these ever move behind one origin (a hub), where one sign-out clearing everything
+   * would be what a user expects.
+   */
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: "local" });
   };
 
   return (
