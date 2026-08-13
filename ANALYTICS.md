@@ -298,6 +298,51 @@ A carrier averaging 33 days on a lane is meaningless alone. It is a **strength**
 **Every metric in this view is a delta against the same lane's competing set.** Absolute transit
 times belong in the grid, not here.
 
+## Two baselines — and why one comes first
+
+There are two defensible ways to say a carrier is "strong on this lane":
+
+| | Baseline | Answers | Moment |
+|---|---|---|---|
+| **Peer-relative** | the other carriers **on this lane** | "Should I book them here?" | booking |
+| **Self-relative** | that carrier's **own other lanes** | "What should I give them in the RFQ?" | allocation |
+
+Both are real. **Build peer-relative first — it is the primitive, and self-relative is computed from
+it.**
+
+### Self-relative cannot be built on raw transit
+
+Comparing a carrier's transit across different lanes compares different distances. Measured, HMM's
+network sorted by their own average transit:
+
+| Lane | Their avg | Lane avg | Peer delta |
+|---|---|---|---|
+| Qingdao → Long Beach | **20.0d** ← their fastest | 22.9d | −2.9d |
+| Laem Chabang → Long Beach | 23.3d | 25.2d | −2.0d |
+| **Semarang → Long Beach** | 28.4d | 36.7d | **−8.3d** ← their strongest |
+| Laem Chabang → New York | 40.7d | 48.5d | **−7.9d** |
+| Nhava Sheva → New York | 44.8d | 41.4d | **+3.4d** |
+| Nhava Sheva → Savannah | 58.2d | 53.2d | +5.0d |
+
+Their *fastest* lane is only 2.9 days better than rivals — unremarkable. Their *strongest* lane is 8
+days slower in absolute terms and 8.3 days better than everyone on it. And rows 4 and 5 are within 4
+days of each other absolutely while being a strength and a weakness respectively.
+
+**Ranking a carrier's own lanes by raw transit ranks distance, not performance.**
+
+### So self-relative is a delta of the delta
+
+The correct form: rank a carrier's lanes by **peer delta**, then compare each against **that
+carrier's own mean peer delta**.
+
+HMM averages roughly **−2.4 days** against peers across their 16 qualifying lanes — that is their
+house standard. Read against it, Semarang → Long Beach (−8.3) is ~6 days better than they normally
+manage, while Qingdao (−2.9) is half a day better: ordinary, *for them*.
+
+This is why the ordering matters. Once peer delta exists as a column, self-relative is one more
+aggregation over the same numbers — **no new data path, no new query.** Built the other way round,
+you would be ranking distances and would have to throw it away.
+
 ## Metrics per (carrier, lane)
 
 | Metric | Definition | Reads as |
@@ -496,11 +541,15 @@ inconsistent and neither will be trusted.
 
 1. **Pure functions first** — dedupe, normalisation, corridor keys, lane aggregates, deltas.
    `Schedule[]` in, plain objects out. No React, no map.
-2. **View C (carrier profile)** — highest value per unit of work, needs no map, and every number in
-   it is already tabulated above to check against.
+2. **View C (carrier profile), peer-relative only** — highest value per unit of work, needs no map,
+   and every number in it is already tabulated above to check against. Make `peerDelta` a first-class
+   field on the per-(carrier, lane) record, because step 6 reads it again.
 3. **View B (carrier comparison)** — mostly a re-aggregation of the same primitives.
 4. **View A list** — corridors as rows.
 5. **The map last** — purely a rendering of data already proven correct.
+6. **Self-relative baseline** — a toggle on View C between "vs other carriers on this lane" and "vs
+   this carrier's own network". Deliberately last, and cheap by then: it is an aggregation over the
+   `peerDelta` column from step 2, not a new query.
 
 **Why this order:** every number in this document was derived by SQL and can be re-derived in Node.
 If the aggregates are pure functions, their output can be checked against the tables above without
