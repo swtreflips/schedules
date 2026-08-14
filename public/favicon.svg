@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Schedules">
+  <!--
+    A calendar with one date chosen.
+
+    THE RINGS AND THE BAND ARE THE ICON, not a grid of day cells. The stuffer planner favicon is
+    already a 2x3 grid of light blocks on this same dark tile, and a conventional calendar is also
+    a grid of cells on a tile: side by side in a tab strip at 16px the two would be the same
+    picture. Two rings poking above a solid header band read as "calendar" on their own, and
+    nothing else in the estate has that silhouette.
+
+    One marked day rather than a full month. The app exists to answer WHICH date you sail, so the
+    single accent square is the whole idea, and at 16px a month grid is mush anyway.
+
+    Colours are the app's own tokens: the ink tile is shared with the planner so the estate looks
+    related, and harbour blue is what separates them. The blue appears twice, on the band and on
+    the day, so accent reads as "dates" rather than as decoration.
+
+    NB: no double hyphen anywhere in this comment. XML forbids it inside a comment body, and
+    writing a CSS variable with its leading dashes once made the planner icon malformed. Browsers
+    render nothing and say nothing.
+
+    Built for 16px first: seven shapes, no strokes, no gradients.
+  -->
+  <rect width="32" height="32" rx="7" fill="#112424"/>
+
+  <!-- binder rings, breaking the top edge of the body so the silhouette reads as a calendar -->
+  <rect x="10.5" y="4.5" width="2.5" height="5" rx="1.25" fill="#f7f7f5"/>
+  <rect x="19"   y="4.5" width="2.5" height="5" rx="1.25" fill="#f7f7f5"/>
+
+  <!-- the page -->
+  <rect x="6" y="7.5" width="20" height="18" rx="2.5" fill="#f7f7f5"/>
+
+  <!-- header band: rounded rect plus a square patch, so only the TOP corners are rounded -->
+  <rect x="6" y="7.5" width="20" height="5"   rx="2.5" fill="#107ca6"/>
+  <rect x="6" y="10"  width="20" height="2.5"          fill="#107ca6"/>
+
+  <!-- the chosen date -->
+  <rect x="13" y="16" width="6" height="6" rx="1.4" fill="#107ca6"/>
+</svg>
