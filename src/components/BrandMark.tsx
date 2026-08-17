@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import vesselIcon from "../assets/vesselIcon.png";
 
 /**
  * The app's identity lockup — icon slot and wordmark.
@@ -23,9 +24,16 @@ import type { ReactNode } from "react";
  * clear 4.5:1 against its own wash, and on dark it needs `accent-light`, because the mid-tone
  * accent reads muddy against a night-blue ground. Same shape, opposite ends of the ramp.
  *
- * ── The monogram ─────────────────────────────────────────────────────────────────────────────
- * Until real icons exist the slot shows the app's initial in the logotype face, so the reserved
- * space reads as a mark rather than a gap. Pass `icon` and it disappears.
+ * ── The icon ─────────────────────────────────────────────────────────────────────────────────
+ * The slot held a monogram until the artwork existed; it now holds the vessel. The reserved space
+ * was sized for exactly this, so nothing around it moved when the icon landed.
+ *
+ * The source was a 1254px, 1.2MB illustration on an OPAQUE white background — it would have
+ * covered the accent wash with a white square and glared on the dark gate screen. What ships here
+ * is cropped to its content, resized to 192px (4x the largest slot, for retina), and had the
+ * background flood-filled to transparent INWARD FROM THE BORDER rather than keyed by colour: the
+ * cream deck reads (254,247,229) and the foam is near-white, so a plain white key would have
+ * punched holes through the middle of the ship. 42KB, and the wash shows through as intended.
  */
 
 export const APP_NAME = "Schedules";
@@ -33,17 +41,17 @@ export const APP_NAME = "Schedules";
 export const APP_DESCRIPTOR = "Sailings";
 
 const SIZES = {
-  sm: { slot: "h-9 w-9 rounded-2xl", gap: "gap-2.5", name: "text-base", monogram: "text-[15px]" },
-  lg: { slot: "h-12 w-12 rounded-[1.15rem]", gap: "gap-3", name: "text-3xl", monogram: "text-xl" },
+  sm: { slot: "h-9 w-9 rounded-2xl", gap: "gap-2.5", name: "text-base" },
+  lg: { slot: "h-12 w-12 rounded-[1.15rem]", gap: "gap-3", name: "text-3xl" },
 } as const;
 
 const TONES = {
-  light: { wash: "bg-accent/8", monogram: "text-accent-strong", name: "text-ink", dot: "text-accent" },
-  dark: { wash: "bg-accent-light/15", monogram: "text-accent-light", name: "text-white", dot: "text-accent-light" },
+  light: { wash: "bg-accent/8", name: "text-ink", dot: "text-accent" },
+  dark: { wash: "bg-accent-light/15", name: "text-white", dot: "text-accent-light" },
 } as const;
 
 interface Props {
-  /** Fills the slot and replaces the monogram. */
+  /** Overrides the vessel artwork in the slot. */
   icon?: ReactNode;
   size?: keyof typeof SIZES;
   tone?: keyof typeof TONES;
@@ -60,12 +68,8 @@ export function BrandMark({ icon = null, size = "sm", tone = "light", className 
         className={`flex shrink-0 items-center justify-center overflow-hidden ${s.slot} ${t.wash}`}
       >
         {icon ?? (
-          <span
-            aria-hidden="true"
-            className={`font-logo font-medium leading-none ${s.monogram} ${t.monogram}`}
-          >
-            {APP_NAME.charAt(0)}
-          </span>
+          /* alt="" — the name sits right beside it, so announcing the ship twice adds nothing. */
+          <img src={vesselIcon} alt="" className="h-full w-full object-contain" />
         )}
       </span>
 
