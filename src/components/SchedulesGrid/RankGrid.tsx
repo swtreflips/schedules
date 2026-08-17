@@ -10,6 +10,7 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { type ColDef } from "ag-grid-community";
 import type { Schedule } from "../../types/schedule";
+import { compareDateAsc, compareNumberAsc } from "../../lib/compare";
 import { GridToolbar } from "./GridToolbar";
 import { PodFilter } from "./PodFilter";
 import { PodFilterPopover } from "./PodFilterPopover";
@@ -88,13 +89,15 @@ export function RankGrid({
 
   const rankRows = useMemo(() => {
     const sorted = [...rows].sort((a, b) => {
+      // All three fields are nullable; sorting them raw threw on the first row without a
+      // published ETA. Nulls go last in every mode — see lib/compare.ts.
       let cmp = 0;
       if (sortKey === "transit_time_days") {
-        cmp = a.transit_time_days - b.transit_time_days;
+        cmp = compareNumberAsc(a.transit_time_days, b.transit_time_days);
       } else if (sortKey === "etd") {
-        cmp = a.etd.localeCompare(b.etd);
+        cmp = compareDateAsc(a.etd, b.etd);
       } else {
-        cmp = a.eta.localeCompare(b.eta);
+        cmp = compareDateAsc(a.eta, b.eta);
       }
       return sortDir === "asc" ? cmp : -cmp;
     });

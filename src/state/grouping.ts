@@ -1,9 +1,13 @@
 import type { Schedule } from "../types/schedule";
+import { compareDateAsc } from "../lib/compare";
 
 /**
  * Group schedules by carrier_code. Within each group, schedules are sorted
  * by ETA ascending (earliest first), so groups.get(code)[0] is always the
  * default "best" pick for that carrier.
+ *
+ * Because that first element becomes the carrier's recommendation, rows with no published ETA
+ * sort LAST rather than first — see `lib/compare.ts`.
  */
 export function groupByCarrier(
   schedules: Schedule[]
@@ -15,7 +19,7 @@ export function groupByCarrier(
     else map.set(s.carrier_code, [s]);
   }
   for (const [, arr] of map) {
-    arr.sort((a, b) => a.eta.localeCompare(b.eta));
+    arr.sort((a, b) => compareDateAsc(a.eta, b.eta));
   }
   return map;
 }

@@ -68,6 +68,10 @@ export function App() {
     return rows.filter(
       (s) =>
         enabledCarriers.has(s.carrier_code) &&
+        // `etd` is nullable in the schema. A sailing with no departure date cannot be checked
+        // against the cargo ready date, and a booking decision needs one, so it is excluded
+        // rather than passed through untested.
+        s.etd != null &&
         s.etd.slice(0, 10) >= crd &&
         !excludedPods.has(s.port_of_discharge)
     );
@@ -86,11 +90,11 @@ export function App() {
   // Derived from the full server response (not visibleRows) so the floor
   // doesn't shift as the user changes CRD itself.
   const minCrd = useMemo(() => {
-    if (rows.length === 0) return undefined;
-    let earliest = rows[0].etd.slice(0, 10);
+    let earliest: string | undefined;
     for (const r of rows) {
+      if (r.etd == null) continue;
       const d = r.etd.slice(0, 10);
-      if (d < earliest) earliest = d;
+      if (earliest === undefined || d < earliest) earliest = d;
     }
     return earliest;
   }, [rows]);
