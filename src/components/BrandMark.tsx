@@ -45,9 +45,20 @@ const SIZES = {
   lg: { slot: "h-12 w-12 rounded-[1.15rem]", gap: "gap-3", name: "text-3xl" },
 } as const;
 
+/*
+  THE DARK SLOT IS A LIGHT PLATE, NOT A DARKER WASH, and the artwork forced it.
+
+  The vessel's hull is rgb(24,44,70). The gate ground is rgb(30,58,79). Those measure 1.19:1
+  against each other, so the ship simply vanished and left three coloured containers floating on a
+  night sky. No accent wash at any opacity fixes a collision that close.
+
+  On dark the slot therefore becomes its own ground — a paper plate the ship sits on, which reads
+  as a sticker and takes the hull to 12.52:1. The wash survives on `light`, where the header is
+  white and the hull already clears 14:1.
+*/
 const TONES = {
   light: { wash: "bg-accent/8", name: "text-ink", dot: "text-accent" },
-  dark: { wash: "bg-accent-light/15", name: "text-white", dot: "text-accent-light" },
+  dark: { wash: "bg-panel", name: "text-white", dot: "text-accent-light" },
 } as const;
 
 interface Props {
