@@ -40,6 +40,15 @@
   --font-sans: "DM Sans", system-ui, sans-serif;
   --font-mono: "DM Mono", ui-monospace, monospace;
 
+  /* THE LOGOTYPE FACE, and nothing else in the interface uses it.
+
+     A product name set in the UI face at UI weight reads as a label rather than an identity —
+     which is what this mark did. Fraunces is a soft serif with real SOFT and WONK axes, built to
+     feel hand-cut, and it holds that warmth at 16px.
+
+     Same token name in Freight and Planner so the lockup stays copy-paste portable. */
+  --font-logo: "Fraunces", ui-serif, Georgia, serif;
+
   --radius-none: 0;
 }
 
