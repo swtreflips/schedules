@@ -49,6 +49,10 @@
      Same token name in Freight and Planner so the lockup stays copy-paste portable. */
   --font-logo: "Fraunces", ui-serif, Georgia, serif;
 
+  /* Sweep and monogram on the dark gate screens. The plain accent is a mid-tone blue and reads
+     muddy on a night-blue ground; this is the light step that ground needs. 7.79:1 on it. */
+  --color-accent-light: #5cb8de;
+
   --radius-none: 0;
 }
 
@@ -752,4 +756,71 @@ input[type="number"] {
   color: var(--color-faint);
   margin: 0 8px;
   user-select: none;
+}
+
+
+/* ── the gate atmosphere ───────────────────────────────────────────────────
+   Ported from Freight, whose sign-in and loading screens share one recipe: a
+   radial ground, a film grain, a faint graph grid, and a sweeping bar. Four
+   cheap layers that turn a blank white page into somewhere.
+
+   THE GROUND IS NIGHT-BLUE, NOT FREIGHT'S GREEN, and that is deliberate. What
+   makes Freight's screen work is terracotta against green — the accent opposes
+   the ground. This app's accent is already blue, so a shared green ground would
+   leave it adrift and a mid-blue ground would swallow it. Night-blue with a
+   LIGHT blue sweep contrasts by value instead: a lit window in a dark sky.
+   ────────────────────────────────────────────────────────────────────────── */
+:root {
+  --ground-lit:  #1e3a4f;
+  --ground-mid:  #16293a;
+  --ground-deep: #0d1b26;
+  --ground-muted: #9db6c4;   /* caption text — 8.26:1 on the deepest tone */
+
+  /* Fractal noise as a data URI: tactile depth with no image request. */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  --grain-opacity: 0.06;
+}
+
+.ground {
+  background-image: radial-gradient(
+    110% 120% at 0% 0%,
+    var(--ground-lit) 0%,
+    var(--ground-mid) 45%,
+    var(--ground-deep) 100%
+  );
+}
+
+/* Graph paper, barely there. ::after so the host element keeps its own children. */
+.ground-grid::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgb(255 255 255 / 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
+  opacity: 0.5;
+}
+
+.grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: var(--grain);
+  opacity: var(--grain-opacity);
+}
+
+/* The loading bar. Travels past its own width so the rail is empty between passes. */
+@keyframes sweep {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(420%); }
+}
+.animate-sweep { animation: sweep 1.3s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* A bar shuttling forever is exactly what this setting exists to stop. It stays
+     visible and still, so the screen still reads as busy rather than broken. */
+  .animate-sweep { animation: none; transform: translateX(150%); width: 100%; }
 }

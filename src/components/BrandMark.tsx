@@ -15,13 +15,13 @@ import type { ReactNode } from "react";
  *
  * OPTICAL SIZING IS THE BROWSER'S JOB. The font is requested with `opsz` as a range, so it stays
  * variable and `font-optical-sizing: auto` — the default — picks the right optical size on its
- * own. Setting `font-variation-settings` here would silently switch that off. Weight and SOFT are
- * pinned in the request instead.
+ * own. Setting `font-variation-settings` here would silently switch that off.
  *
- * ── The slot ─────────────────────────────────────────────────────────────────────────────────
- * A soft wash of the app's own accent, no shadow, generous radius. A solid fill with a drop shadow
- * is the iOS app-chip convention and would fight a painted illustration; a wash reads as ground
- * rather than as a container.
+ * ── Two tones, because the mark lives on two grounds ─────────────────────────────────────────
+ * `light` is the app header. `dark` is the sign-in and loading screens, which sit on the night
+ * ground. They are not the same colours dimmed: on light the monogram needs `accent-strong` to
+ * clear 4.5:1 against its own wash, and on dark it needs `accent-light`, because the mid-tone
+ * accent reads muddy against a night-blue ground. Same shape, opposite ends of the ramp.
  *
  * ── The monogram ─────────────────────────────────────────────────────────────────────────────
  * Until real icons exist the slot shows the app's initial in the logotype face, so the reserved
@@ -32,29 +32,48 @@ export const APP_NAME = "Schedules";
 /** Not rendered in the lockup any more; still the module's description, used for titles. */
 export const APP_DESCRIPTOR = "Sailings";
 
+const SIZES = {
+  sm: { slot: "h-9 w-9 rounded-2xl", gap: "gap-2.5", name: "text-base", monogram: "text-[15px]" },
+  lg: { slot: "h-12 w-12 rounded-[1.15rem]", gap: "gap-3", name: "text-3xl", monogram: "text-xl" },
+} as const;
+
+const TONES = {
+  light: { wash: "bg-accent/8", monogram: "text-accent-strong", name: "text-ink", dot: "text-accent" },
+  dark: { wash: "bg-accent-light/15", monogram: "text-accent-light", name: "text-white", dot: "text-accent-light" },
+} as const;
+
 interface Props {
   /** Fills the slot and replaces the monogram. */
   icon?: ReactNode;
+  size?: keyof typeof SIZES;
+  tone?: keyof typeof TONES;
   className?: string;
 }
 
-export function BrandMark({ icon = null, className = "" }: Props) {
+export function BrandMark({ icon = null, size = "sm", tone = "light", className = "" }: Props) {
+  const s = SIZES[size];
+  const t = TONES[tone];
+
   return (
-    <div className={`flex items-center gap-2.5 overflow-hidden ${className}`}>
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-accent/8">
+    <div className={`flex items-center ${s.gap} overflow-hidden ${className}`}>
+      <span
+        className={`flex shrink-0 items-center justify-center overflow-hidden ${s.slot} ${t.wash}`}
+      >
         {icon ?? (
           <span
             aria-hidden="true"
-            className="font-logo text-[15px] font-medium leading-none text-accent-strong"
+            className={`font-logo font-medium leading-none ${s.monogram} ${t.monogram}`}
           >
             {APP_NAME.charAt(0)}
           </span>
         )}
       </span>
 
-      <span className="font-logo text-base font-medium leading-none tracking-[-0.005em] text-ink">
+      <span
+        className={`font-logo font-medium leading-none tracking-[-0.005em] ${s.name} ${t.name}`}
+      >
         {APP_NAME}
-        <span className="accent-mark">.</span>
+        <span className={t.dot}>.</span>
       </span>
     </div>
   );
