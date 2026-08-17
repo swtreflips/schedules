@@ -69,12 +69,25 @@ interface Props {
   className?: string;
 }
 
+/*
+  THE LOCKUP IS A MARK, NOT A CONTROL.
+
+  Freight and Planner used to wrap theirs in a link home, which left this one — a single screen
+  with no router — as plain text. The cursor told three different stories: a hand in two apps and a
+  text I-beam here. A logo only earns a link when there is somewhere to go, and faking one here
+  would have meant a full reload that discards the loaded search.
+
+  So it is inert in all three now. `select-none` matters as much as the cursor: dragging across a
+  wordmark and highlighting it is the tell that something is text rather than a mark.
+*/
 export function BrandMark({ icon = null, size = "sm", tone = "light", className = "" }: Props) {
   const s = SIZES[size];
   const t = TONES[tone];
 
   return (
-    <div className={`flex items-center ${s.gap} overflow-hidden ${className}`}>
+    <div
+      className={`flex cursor-default select-none items-center ${s.gap} overflow-hidden ${className}`}
+    >
       <span
         className={`flex shrink-0 items-center justify-center overflow-hidden ${s.slot} ${t.wash}`}
       >

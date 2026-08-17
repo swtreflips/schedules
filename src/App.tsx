@@ -102,7 +102,10 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="flex items-center justify-between px-8 pt-3 pb-2">
+      {/* Brand bar geometry is shared across Freight, Schedules and Planner: h-16 with px-4 puts
+          the icon slot at exactly (16, 14) from the viewport corner in all three, so switching
+          browser tabs leaves the mark pinned instead of hopping. */}
+      <header className="flex h-16 shrink-0 items-center justify-between px-4">
         {/* Brand lockup — icon slot stays reserved; see BrandMark */}
         <BrandMark />
         <AccountMenu />
