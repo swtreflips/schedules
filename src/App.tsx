@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { AccountMenu } from "./components/AccountMenu";
+import { BrandMark } from "./components/BrandMark";
 import { useAuth } from "./lib/auth";
 import { SearchPanel } from "./components/SearchPanel/SearchPanel";
 import { SchedulesGrid } from "./components/SchedulesGrid/SchedulesGrid";
@@ -102,9 +103,8 @@ export function App() {
   return (
     <div className="flex h-full flex-col bg-bg">
       <header className="flex items-center justify-between px-8 pt-3 pb-2">
-        <h1 className="text-[22px] font-medium leading-none tracking-[-0.02em] text-ink">
-          Schedules<span className="accent-mark">.</span>
-        </h1>
+        {/* Brand lockup — icon slot stays reserved; see BrandMark */}
+        <BrandMark />
         <AccountMenu />
       </header>
 
