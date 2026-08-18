@@ -503,6 +503,149 @@ are fast and cheap** — and where they charge a premium for being slow.
 
 ---
 
+# Route Geometry — Storing and Plotting Corridors
+
+## The model: legs, never whole corridors
+
+`sea_routes` is already the right shape. It keys on `(origin_port, destination_port)` and carries
+`geojson`, `route_geom`, `distance_km`, `duration_hours`. Nothing about its structure needs to
+change — **it is a leg table, and it needs filling rather than redesigning.**
+
+Store one geometry per **leg**, and compose corridors from them at render time.
+
+The alternative — a polyline per corridor — duplicates shared water. Nhava Sheva → Shekou → Los
+Angeles and Nhava Sheva → Shekou → Oakland are two rows that hold the same first half twice, and a
+third corridor through Shekou stores it a third time. Legs are written once and reused by every
+corridor that crosses them.
+
+**Measured, this is the whole of it:**
+
+| | |
+|---|---|
+| Sailings in the MV | 2,559 |
+| Distinct legs that draw all of them | **288** |
+| Already in `sea_routes` | 29 (the direct pairs) |
+| Still to generate | 259 (the transshipment legs) |
+
+288 geometries render every corridor the app can currently draw. That ratio is the argument for
+legs on its own — and it improves as data grows, because new sailings mostly recombine ports that
+already have legs.
+
+## The chain is already in the data
+
+**`route_ports` is the complete ordered sequence** — POL first, POD last, transshipments in
+between, for every transport type:
+
+```
+Direct  ["Hai Phong, Vietnam", "Long Beach, CA"]
+1 TS    ["Nhava Sheva, India", "Shekou, China", "Los Angeles, CA"]
+5 TS    ["Pipavav, India", "COCHIN", "Colombo, Sri Lanka", "Tema, Ghana",
+         "Barcelona, Spain", "Cartagena, Colombia", "Charleston, SC"]
+```
+
+So the whole derivation is:
+
+```
+legs(schedule) = consecutive pairs of route_ports
+              = [(p[0],p[1]), (p[1],p[2]), … , (p[n-1],p[n])]
+```
+
+Worked through the motivating example: a sailing Nhava Sheva → Los Angeles transshipping at Taipei
+has `route_ports = ["Nhava Sheva, India", "Taipei", "Los Angeles, CA"]`, which yields
+`Nhava Sheva→Taipei` and `Taipei→Los Angeles` — two lookups, both already stored in isolation, and
+the map draws the chain.
+
+## Never branch on `transport_type`
+
+**A direct sailing is not a special case. It is a chain of length two.**
+
+The renderer should never ask "is this direct?" — it takes `route_ports`, walks the pairs, and
+draws what it finds. One code path covers Direct through 6 TS and whatever appears next.
+
+This is not a stylistic preference. `src/types/schedule.ts` declares:
+
+```ts
+export type TransportType = "Direct" | "1 TS" | "2 TS";
+```
+
+The live data says otherwise:
+
+| transport_type | sailings | chain length | legs |
+|---|---|---|---|
+| Direct | 548 | 2 | 1 |
+| 1 TS | 1,533 | 3 | 2 |
+| 2 TS | 448 | 4 | 3 |
+| 3 TS | 8 | 5 | 4 |
+| 5 TS | 21 | 7 | 6 |
+| 6 TS | 1 | 8 | **7** |
+
+**The type is wrong and must be widened**, but the deeper point is that any code keyed on it would
+have silently mishandled 30 sailings today and an unknown number tomorrow. Chain length is derived
+from the data; the label is a description of it.
+
+## Do not reconcile `route_ports` against the endpoint columns
+
+A measured chain ends `"Lazaro Cardenas, Mexico"` while that row's `port_of_discharge` is
+`"Lazaro Cardenas, Mic"` — the same port under two spellings. Treat `route_ports` as the single
+source of truth for geometry, and do not assert `route_ports[-1] === port_of_discharge`. An
+equality check there fails on real rows.
+
+## Populate `sea_routes` with the SAME names the corridor key uses
+
+This is the one place the geometry work and the counting work must agree.
+
+Corridor identity normalises port names — `Singapore, Singapore` / `SINGAPORE` / `Singapore` are
+one port, or the corridor fragments into three (see Counting Rules). If leg geometry is keyed on
+raw `route_ports` strings while corridor identity is keyed on normalised ones, then one corridor
+owns legs under several spellings and the merge that fixes the counting breaks the drawing.
+
+**Normalise once, and store `sea_routes` rows under the normalised name.** The 259 legs still to
+generate should be written that way from the start; it is far cheaper than re-keying later.
+
+## Fetching: one round trip, deduped in SQL
+
+Corridors share legs heavily, so never fetch per corridor. An RPC that takes the same scope as the
+view, unnests `route_ports`, and returns the **distinct** legs joined to their geometry:
+
+```sql
+create or replace function corridor_legs(...)
+returns table (origin_port text, destination_port text, geojson jsonb, distance_km numeric)
+```
+
+The client then never assembles a pair list at all — it receives exactly the geometries the current
+view needs, once, and builds a `Map` keyed `"a→b"`. Each corridor is then an ordered array of
+lookups into that map, rendered as one feature with the corridor id as a property so selection and
+hover work off the same object.
+
+Add a unique index on `(lower(origin_port), lower(destination_port))` for the join.
+
+Legs are static once generated — they describe water, not schedules — so they cache indefinitely
+and never need revalidating when a snapshot refreshes.
+
+## A missing leg must be loud
+
+If a pair has no geometry, draw a **dashed great-circle placeholder** and mark the corridor
+incomplete.
+
+Silently skipping it is the dangerous failure: a 2 TS corridor missing its middle leg renders as a
+straight line from origin to destination and reads as a *direct sailing*. That is the same trap as
+an unresolved transshipment port, and it produces a map that looks fine and lies.
+
+With 259 legs outstanding, this is the normal state for a while rather than an edge case, so build
+the placeholder before the happy path.
+
+## Two rendering details that will bite
+
+**The antimeridian.** Asia→US Pacific legs cross ±180°. A LineString whose longitudes jump from
+179 to -179 draws backwards across the entire map. Split those legs, or normalise longitudes to a
+continuous frame before handing them to MapLibre.
+
+**Reuse `distance_km`.** `sea_routes` already carries routed distance and duration per leg, so
+summing a chain gives real sailed distance per corridor — better than great-circle, and a free
+column for the corridor table in View A.
+
+---
+
 # Implementation Notes
 
 ## Dependency
