@@ -654,6 +654,41 @@ table plus edits to the RPC signature and the client's `Map` key.
 primary key will not stop the fragmentation described above — only generating under normalised names
 will. Worth folding the `lower()` into the new key if the generator cannot guarantee casing.
 
+## The render unit is the corridor, not the sailing
+
+Do not walk the result set drawing a chain per schedule row. Group by `route_ports` first and draw
+each distinct corridor once.
+
+Measured on the busiest lane, Nhava Sheva → Los Angeles:
+
+| | |
+|---|---|
+| Sailings | 122 |
+| Distinct corridors | **10** |
+| Distinct legs to fetch | **17** |
+
+Per-row plotting plots the same ten lines about twelve times each, stacked on identical pixels. It
+costs twelve times the work to produce exactly the same picture. Across the estate there are 66
+lanes averaging 4.4 corridors each, with 14 on the worst.
+
+The sailings that collapse into a group are not lost — they become the corridor's weight
+(departures, carriers, transit spread), which is what should drive line thickness and colour.
+
+**Give the geometry function a chain, not a schedule:**
+
+```
+chainGeometry(route_ports: string[]) → LineString[]
+```
+
+The corridor view feeds it deduped corridors. A future "show me this sailing's path" from a grid row
+feeds it one row's array. Same function, no special case, and the geometry layer never needs to know
+whether it is drawing one sailing or a thousand.
+
+**Ten to fourteen lines on one lane is the real risk, and it is visual rather than technical.** 17
+legs is one small round trip that caches forever; cost is not the problem. Legibility is. A corridor
+with 40 departures and one with 2 must not look alike, or the map is spaghetti — weighting by
+departures is what turns the picture into a statement.
+
 ## Fetching: one round trip, deduped in SQL
 
 Corridors share legs heavily, so never fetch per corridor. An RPC that takes the same scope as the
