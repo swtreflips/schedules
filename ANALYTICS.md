@@ -527,9 +527,28 @@ corridor that crosses them.
 | Already in `sea_routes` | 29 (the direct pairs) |
 | Still to generate | 259 (the transshipment legs) |
 
-288 geometries render every corridor the app can currently draw. That ratio is the argument for
-legs on its own — and it improves as data grows, because new sailings mostly recombine ports that
-already have legs.
+**On storage alone the two models are a wash, and it is worth being straight about that.** There are
+**286 distinct corridors against 288 distinct legs** — near enough 1:1. Comparing 288 legs to 2,559
+sailings flatters the leg model: sailings repeat the same corridor 8.9 times on average, and that
+repetition is free under either scheme. Corridor-level reuse of a leg is roughly 2×, and 16 legs
+(6%) are used by exactly one corridor, where the model is pure overhead.
+
+**The argument for legs is marginal cost, not total cost.**
+
+Carrier services churn. A new discharge port or a swapped transshipment mints a brand-new corridor,
+which under whole-corridor storage means a brand-new polyline to generate. Under legs, if both its
+pairs already exist the corridor draws for **nothing**. Corridor count tracks commercial decisions;
+leg count tracks the port graph, which is far more stable. Today's counts match — a year of
+reshuffling is what separates them.
+
+Two supporting reasons, neither decisive alone: `sea_routes` is already keyed this way with 29 rows
+done, so corridors would mean starting over under a different key; and a bad stretch of water is
+corrected once in a leg rather than in every corridor polyline that baked it in.
+
+**The cost, stated plainly:** a leg asserts that the water between two ports is a property of the
+*pair*. It is really a property of the *service* — see the routing variants below — and chained legs
+meet at a seam that a single corridor polyline would not have. For a view drawing market structure
+that approximation is fine; for tracking or ETA work it would not be.
 
 ## The chain is already in the data
 
@@ -601,6 +620,39 @@ owns legs under several spellings and the merge that fixes the counting breaks t
 
 **Normalise once, and store `sea_routes` rows under the normalised name.** The 259 legs still to
 generate should be written that way from the start; it is far cheaper than re-keying later.
+
+## Leave room for routing variants in the key — before generating the 259
+
+The same port pair can be sailed two ways. Nhava Sheva → Rotterdam via Suez and via the Cape of
+Good Hope is one pair and two completely different lines, and **carriers do not state which on the
+schedule.**
+
+The intended answer is to resolve it from the vessel rather than the schedule: track vessels through
+MarineTraffic, learn what the service actually does, flag it on the vessel record, and pick the
+matching geometry. That work is deferred — but it decides the primary key, and the key has to be
+right *before* 259 rows exist under it.
+
+**The table currently forbids this.** `sea_routes` carries
+`PRIMARY KEY (origin_port, destination_port)`, so a Suez row and a Cape row for the same pair cannot
+coexist — the second insert is rejected. The variant is not merely unmodelled; it is blocked.
+
+Widen the key while the table holds 180 rows rather than 439:
+
+```sql
+alter table sea_routes add column routing_variant text not null default 'default';
+alter table sea_routes drop constraint sea_routes_pkey;
+alter table sea_routes add primary key (origin_port, destination_port, routing_variant);
+```
+
+Every leg generated today is written as `'default'` and behaves exactly as it does now; lookups that
+do not care pass `'default'` and are unaffected. When the vessel data lands, the two variants coexist
+and the resolver picks between them. Done afterwards, the same change is a migration over a full
+table plus edits to the RPC signature and the client's `Map` key.
+
+**One gap the existing key does not close.** It is case-sensitive on raw text, so `Singapore`,
+`SINGAPORE` and `Singapore, Singapore` are three legal, distinct origins pointing at one port. The
+primary key will not stop the fragmentation described above — only generating under normalised names
+will. Worth folding the `lower()` into the new key if the generator cannot guarantee casing.
 
 ## Fetching: one round trip, deduped in SQL
 
