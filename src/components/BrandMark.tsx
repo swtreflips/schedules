@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import vesselIcon from "../assets/vesselIcon.png";
 
 /**
  * The app's identity lockup — icon slot and wordmark.
@@ -24,16 +23,13 @@ import vesselIcon from "../assets/vesselIcon.png";
  * clear 4.5:1 against its own wash, and on dark it needs `accent-light`, because the mid-tone
  * accent reads muddy against a night-blue ground. Same shape, opposite ends of the ramp.
  *
- * ── The icon ─────────────────────────────────────────────────────────────────────────────────
- * The slot held a monogram until the artwork existed; it now holds the vessel. The reserved space
- * was sized for exactly this, so nothing around it moved when the icon landed.
+ * ── The monogram ─────────────────────────────────────────────────────────────────────────────
+ * The slot holds the app's initial in the logotype face while there is no artwork. It stops the
+ * reserved space reading as a gap and lets the three apps look like a family before any icon is
+ * drawn. Pass `icon` and it disappears.
  *
- * The source was a 1254px, 1.2MB illustration on an OPAQUE white background — it would have
- * covered the accent wash with a white square and glared on the dark gate screen. What ships here
- * is cropped to its content, resized to 192px (4x the largest slot, for retina), and had the
- * background flood-filled to transparent INWARD FROM THE BORDER rather than keyed by colour: the
- * cream deck reads (254,247,229) and the foam is near-white, so a plain white key would have
- * punched holes through the middle of the ship. 42KB, and the wash shows through as intended.
+ * The vessel lived here and has been withdrawn pending icons generated properly — which is what
+ * this placeholder is for, and why removing artwork costs one import and one branch.
  */
 
 export const APP_NAME = "Schedules";
@@ -51,28 +47,27 @@ export const APP_DESCRIPTOR = "Sailings";
   rather than a size change.
 */
 const SIZES = {
-  sm: { slot: "h-[3.24rem] w-[3.24rem] rounded-[1.44rem]", gap: "gap-2.5", name: "text-base" },
-  lg: { slot: "h-[4.32rem] w-[4.32rem] rounded-[1.66rem]", gap: "gap-3", name: "text-3xl" },
+  sm: { slot: "h-[3.24rem] w-[3.24rem] rounded-[1.44rem]", gap: "gap-2.5", name: "text-base", monogram: "text-[1.35rem]" },
+  lg: { slot: "h-[4.32rem] w-[4.32rem] rounded-[1.66rem]", gap: "gap-3", name: "text-3xl", monogram: "text-[1.8rem]" },
 } as const;
 
 /*
-  THE DARK SLOT IS A LIGHT PLATE, NOT A DARKER WASH, and the artwork forced it.
+  Two tones, and they are not the same colours dimmed. On light the monogram needs `accent-strong`
+  to clear 4.5:1 against its own wash; on dark it needs `accent-light`, because the mid-tone accent
+  reads muddy against a night-blue ground. Opposite ends of the same ramp.
 
-  The vessel's hull is rgb(24,44,70). The gate ground is rgb(30,58,79). Those measure 1.19:1
-  against each other, so the ship simply vanished and left three coloured containers floating on a
-  night sky. No accent wash at any opacity fixes a collision that close.
-
-  On dark the slot therefore becomes its own ground — a paper plate the ship sits on, which reads
-  as a sticker and takes the hull to 12.52:1. The wash survives on `light`, where the header is
-  white and the hull already clears 14:1.
+  The dark slot was briefly a light plate — the vessel's navy hull measured 1.19:1 against the gate
+  ground and needed paper to sit on. With a monogram that problem does not exist, so the wash comes
+  back. Worth remembering when the new artwork lands: dark art on a dark ground will want the plate
+  again.
 */
 const TONES = {
-  light: { wash: "bg-accent/8", name: "text-ink", dot: "text-accent" },
-  dark: { wash: "bg-panel", name: "text-white", dot: "text-accent-light" },
+  light: { wash: "bg-accent/8", monogram: "text-accent-strong", name: "text-ink", dot: "text-accent" },
+  dark: { wash: "bg-accent-light/15", monogram: "text-accent-light", name: "text-white", dot: "text-accent-light" },
 } as const;
 
 interface Props {
-  /** Overrides the vessel artwork in the slot. */
+  /** Fills the slot and replaces the monogram. */
   icon?: ReactNode;
   size?: keyof typeof SIZES;
   tone?: keyof typeof TONES;
@@ -102,8 +97,12 @@ export function BrandMark({ icon = null, size = "sm", tone = "light", className 
         className={`flex shrink-0 items-center justify-center overflow-hidden ${s.slot} ${t.wash}`}
       >
         {icon ?? (
-          /* alt="" — the name sits right beside it, so announcing the ship twice adds nothing. */
-          <img src={vesselIcon} alt="" className="h-full w-full object-contain" />
+          <span
+            aria-hidden="true"
+            className={`font-logo font-medium leading-none ${s.monogram} ${t.monogram}`}
+          >
+            {APP_NAME.charAt(0)}
+          </span>
         )}
       </span>
 
