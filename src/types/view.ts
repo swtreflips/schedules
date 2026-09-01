@@ -1,1 +1,1 @@
-export type ViewMode = "carrier" | "rank";
+export type ViewMode = "carrier" | "rank" | "analytics";

@@ -824,3 +824,92 @@ input[type="number"] {
      visible and still, so the screen still reads as busy rather than broken. */
   .animate-sweep { animation: none; transform: translateX(150%); width: 100%; }
 }
+
+/* ── Analytics ───────────────────────────────────────────────────────────────
+   Corridor and carrier tables. Same house rules as the grid: squared corners,
+   mono uppercase labels at 0.08em, tabular numerals on every figure, 0.12s
+   transitions. Tokens only — theme.ts has drifted to an older palette and its
+   hex values must not be copied here. */
+
+.an-root { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+.an-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-rule);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.an-lane { display: inline-flex; align-items: center; gap: 8px; }
+
+.an-lane select {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: none;
+  border-bottom: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-none);
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.an-lane select:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+.an-meta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+}
+
+.an-scroll { overflow: auto; flex: 1; min-height: 0; padding: 0 12px 24px; }
+.an-section { margin-top: 20px; }
+.an-section .eyebrow { display: block; margin-bottom: 8px; }
+
+.an-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+
+.an-table th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-rule-strong);
+  white-space: nowrap;
+}
+
+.an-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--color-rule);
+  color: var(--color-ink);
+  vertical-align: baseline;
+}
+
+.an-table tbody tr:hover { background: var(--color-panel); }
+
+/* Every figure is tabular so columns compare down the page rather than jitter. */
+.an-num, .an-table th.an-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.an-carrier { font-family: var(--font-mono); font-weight: 500; letter-spacing: 0.04em; }
+.an-carriers { font-family: var(--font-mono); font-size: 11px; color: var(--color-secondary); }
+
+/* The median leads; the range sits beside it in a quieter weight. Never one without the other —
+   a corridor's spread is the thing an average hides. */
+.an-median { font-variant-numeric: tabular-nums; }
+.an-range { margin-left: 8px; font-size: 11px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+/* Shown only when some sailings have no published transit, so the denominator is never implied. */
+.an-partial { margin-left: 8px; font-size: 10px; color: var(--color-faint); }
+
+.an-dim { color: var(--color-faint); }
+.an-rail { font-family: var(--font-mono); font-size: 10px; color: var(--color-accent); letter-spacing: 0.04em; }
+
+.an-foot { margin-top: 10px; font-size: 11px; color: var(--color-muted); max-width: 68ch; }
+
+.an-state { padding: 24px 12px; font-family: var(--font-mono); font-size: 11.5px; color: var(--color-muted); }
+.an-error { color: var(--color-accent); }

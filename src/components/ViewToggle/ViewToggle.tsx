@@ -16,6 +16,11 @@ const OPTIONS: Array<{ value: ViewMode; label: string; hint: string }> = [
     label: "Rank",
     hint: "Top schedules globally by earliest ETA",
   },
+  {
+    value: "analytics",
+    label: "Analytics",
+    hint: "Corridor and carrier stats for a lane — whole market, not this search",
+  },
 ];
 
 export function ViewToggle({ value, onChange }: Props) {

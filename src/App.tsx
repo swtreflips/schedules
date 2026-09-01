@@ -4,6 +4,7 @@ import { BrandMark } from "./components/BrandMark";
 import { useAuth } from "./lib/auth";
 import { SearchPanel } from "./components/SearchPanel/SearchPanel";
 import { SchedulesGrid } from "./components/SchedulesGrid/SchedulesGrid";
+import { AnalyticsView } from "./components/Analytics/AnalyticsView";
 import { searchSchedules, type SearchParams } from "./state/searchSchedules";
 import { CARRIERS } from "./types/carrier";
 import type { Schedule } from "./types/schedule";
@@ -126,13 +127,17 @@ export function App() {
         errorMessage={errorMessage}
       />
 
-      <SchedulesGrid
-        viewMode={viewMode}
-        rows={visibleRows}
-        availablePods={availablePods}
-        excludedPods={excludedPods}
-        onExcludedPodsChange={setExcludedPods}
-      />
+      {viewMode === "analytics" ? (
+        <AnalyticsView />
+      ) : (
+        <SchedulesGrid
+          viewMode={viewMode}
+          rows={visibleRows}
+          availablePods={availablePods}
+          excludedPods={excludedPods}
+          onExcludedPodsChange={setExcludedPods}
+        />
+      )}
     </div>
   );
 }
