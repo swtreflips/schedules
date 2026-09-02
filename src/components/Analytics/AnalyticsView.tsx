@@ -107,10 +107,10 @@ export function AnalyticsView() {
             <thead>
               <tr>
                 <th>Carrier</th>
-                <th className="an-num">Direct</th>
-                <th className="an-num">1 TS</th>
-                <th className="an-num">2+ TS</th>
-                <th className="an-num" title="Distinct ETD dates — times you can actually ship">Dates</th>
+                <th className="an-num" title="Sailing dates whose best option is direct">Direct</th>
+                <th className="an-num" title="Sailing dates whose best option is one transshipment">1 TS</th>
+                <th className="an-num" title="Sailing dates whose best option is two or more transshipments">2+ TS</th>
+                <th className="an-num" title="Distinct departure dates. Direct + 1 TS + 2+ TS add up to this: each date is counted once, under its best routing.">Dates</th>
                 <th className="an-num" title="Mean transshipments per sailing. Lower is a shorter, less fragile route.">Avg TS</th>
                 <th title="The routing this carrier runs most often">Main service</th>
                 <th className="an-num" title="Median transit of that main service — what is on offer repeatedly, not the best case">Its transit</th>
@@ -178,6 +178,10 @@ export function AnalyticsView() {
           <p className="an-foot">
             <strong>Its transit</strong> is the median of the service each carrier runs most, not
             its fastest sailing — a one-off quick crossing is not what gets booked repeatedly.
+            <strong> Direct / 1 TS / 2+ TS</strong> count sailing DATES, each under its best
+            routing that day, so the three add up to <strong>Dates</strong> — a carrier offering a
+            1 TS and a 2 TS on one departure is counted once, as the 1 TS. <strong>Avg TS</strong>
+            is where the deeper routings it also runs still show.
             <strong> Spread</strong> is what the median hides: the most-served carrier on a lane is
             often the least predictable, and a 27-day spread means the transit you were quoted is
             not the one you can count on. <strong>Sailing window</strong> separates a service that

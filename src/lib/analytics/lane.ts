@@ -202,9 +202,31 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
     const ts2 = group.filter((g) => tsCount(g) >= 2);
     const dates = distinctDates(group);
 
-    const directDates = distinctDates(direct).length;
-    const ts1Dates = distinctDates(ts1).length;
-    const ts2Dates = distinctDates(ts2).length;
+    // EACH DATE IS COUNTED ONCE, BY THE BEST ROUTING AVAILABLE THAT DAY.
+    //
+    // A carrier often publishes several routings for the same departure. HPL on Semarang ->
+    // Savannah sails 7 dates and offers BOTH a 1 TS and a 2 TS option on three of them. Counting
+    // dates per routing type made those columns overlap — 7 with a 1 TS, 3 with a 2 TS, against 7
+    // dates in total — so they read as a breakdown, invited addition, and did not add up.
+    //
+    // Classifying each date by its SHALLOWEST option fixes that and is the operationally true
+    // reading: given a direct and a 2 TS on the same day you would book the direct, so that is
+    // what the day is worth. direct + ts1 + ts2 now equals dates, always.
+    //
+    // Routing depth is not lost — `avgTs` still measures it across every connection, which is
+    // where the 2 TS options a carrier also runs show up.
+    const bestByDate = new Map<string, number>();
+    for (const g of group) {
+      const d = g.etd?.slice(0, 10);
+      if (!d) continue;
+      const depth = tsCount(g);
+      const seen = bestByDate.get(d);
+      if (seen === undefined || depth < seen) bestByDate.set(d, depth);
+    }
+    const depths = [...bestByDate.values()];
+    const directDates = depths.filter((t) => t === 0).length;
+    const ts1Dates = depths.filter((t) => t === 1).length;
+    const ts2Dates = depths.filter((t) => t >= 2).length;
 
     // The routing this carrier runs most, and what THAT delivers — the transit actually on offer
     // rather than its luckiest sailing. Ties broken by the faster median, so a carrier running two
