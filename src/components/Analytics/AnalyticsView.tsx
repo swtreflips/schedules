@@ -114,7 +114,7 @@ export function AnalyticsView() {
                 <th className="an-num" title="Sailing dates whose best option is two or more transshipments">2+ TS</th>
                 <th className="an-num" title="Distinct departure dates. Direct + 1 TS + 2+ TS add up to this: each date is counted once, under its best routing.">Dates</th>
                 <th className="an-num" title="Mean transshipments per sailing. Lower is a shorter, less fragile route.">Avg TS</th>
-                <th title="The routing this carrier runs most often">Main service</th>
+                <th title="The routing this carrier runs on the most dates, and what that routing delivers">Main service</th>
                 <th className="an-num" title="Median transit of that main service — what is on offer repeatedly, not the best case">Its transit</th>
                 <th className="an-num">All sailings — median / range</th>
                 <th className="an-num" title="Slowest minus fastest. A wide spread means the transit you were quoted is not the one you can count on.">Spread</th>
@@ -150,7 +150,9 @@ export function AnalyticsView() {
                     {c.mainRoute ? (
                       <>
                         {c.mainRoute.label}
-                        <span className="an-dim"> ×{c.mainRoute.connections}</span>
+                        <span className="an-dim" title={`${c.mainRoute.dates} sailing dates on this routing, published as ${c.mainRoute.connections} bookable connections`}>
+                          {" "}×{c.mainRoute.dates}
+                        </span>
                       </>
                     ) : (
                       "—"

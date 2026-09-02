@@ -6,6 +6,7 @@ import {
   tsCount,
   type Spread,
 } from "./departures";
+import { canonicalPort, routeLabel, samePlace } from "./ports";
 
 /**
  * Lane analytics: what a lane looks like, and who to ask for rates on it.
@@ -45,7 +46,7 @@ export interface CorridorRow {
   via: string[];
   pod: string;
   ts: number;
-  /** True when the box moves inland from POD by rail: `port_of_discharge !== last_cy`. */
+  /** True when the box moves inland from POD by rail — discharge and Last CY are different places. */
   hasRailLeg: boolean;
   departures: number;
   /** Distinct ETD dates. Chances to ship, as opposed to onward-vessel permutations. */
@@ -77,7 +78,7 @@ export function corridorStats(rows: Schedule[], lane?: Lane): CorridorRow[] {
   const groups = new Map<string, Schedule[]>();
 
   for (const c of conns) {
-    const key = [...(c.ts_ports ?? []), c.port_of_discharge].join(" > ");
+    const key = routeLabel(c);
     const bucket = groups.get(key);
     if (bucket) bucket.push(c);
     else groups.set(key, [c]);
@@ -88,10 +89,12 @@ export function corridorStats(rows: Schedule[], lane?: Lane): CorridorRow[] {
     const first = group[0];
     out.push({
       key,
-      via: first.ts_ports ?? [],
-      pod: first.port_of_discharge,
+      via: (first.ts_ports ?? []).map(canonicalPort),
+      pod: canonicalPort(first.port_of_discharge),
       ts: tsCount(first),
-      hasRailLeg: first.port_of_discharge !== first.last_cy,
+      // Same complex is not a rail leg: a Long Beach discharge against a Los Angeles Last CY moves
+      // by truck across one harbour, not by train across the country.
+      hasRailLeg: !samePlace(first.port_of_discharge, first.last_cy),
       departures: group.length,
       sailDates: distinctDates(group).length,
       carriers: [...new Set(group.map((g) => g.carrier_code))].sort(),
@@ -149,7 +152,7 @@ export interface CarrierRow {
    * Taipei, 8 sailings — runs a 20.5-day median. Booking against the 15 would be booking against
    * something that happened once.
    */
-  mainRoute: { label: string; connections: number; median: number | null } | null;
+  mainRoute: { label: string; dates: number; connections: number; ts: number; median: number | null } | null;
   /**
    * Last published sailing, beside the next one.
    *
@@ -229,11 +232,21 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
     const ts2Dates = depths.filter((t) => t >= 2).length;
 
     // The routing this carrier runs most, and what THAT delivers — the transit actually on offer
-    // rather than its luckiest sailing. Ties broken by the faster median, so a carrier running two
-    // services equally often is represented by the better of them.
+    // rather than its luckiest sailing.
+    //
+    // CHOSEN BY DATES, NOT CONNECTIONS. Picking by connection count selected routings that are
+    // merely duplicated rather than frequent, because a carrier can publish several onward vessels
+    // against one departure. OOCL on Ho Chi Minh -> Los Angeles made the point: a Ningbo double-
+    // transship had 8 connections across just 2 dates, while its direct Long Beach service had 3
+    // connections across 3 dates. Connections named the 2 TS chain as OOCL's main service on a
+    // carrier whose date columns read 4 direct — a flat contradiction on one row, and the very
+    // trap the rest of the table counts dates to avoid.
+    //
+    // Ties break toward the shallower routing, then the faster median: offered equally often, a
+    // direct is the truer description of a carrier than a transship.
     const byRoute = new Map<string, Schedule[]>();
     for (const g of group) {
-      const label = [...(g.ts_ports ?? []), g.port_of_discharge].join(" > ");
+      const label = routeLabel(g);
       const b = byRoute.get(label);
       if (b) b.push(g);
       else byRoute.set(label, [g]);
@@ -242,12 +255,17 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
       [...byRoute.entries()]
         .map(([label, rows2]) => ({
           label,
+          dates: distinctDates(rows2).length,
           connections: rows2.length,
+          // Shallowest, not first: folding a port complex can put a direct and a feeder-to-the-
+          // other-berth under one label, and the shallower is what the routing is worth.
+          ts: Math.min(...rows2.map(tsCount)),
           median: spreadOf(rows2.map((r) => r.transit_time_days)).median,
         }))
         .sort(
           (a, b) =>
-            b.connections - a.connections ||
+            b.dates - a.dates ||
+            a.ts - b.ts ||
             (a.median ?? Infinity) - (b.median ?? Infinity),
         )[0] ?? null;
 
@@ -262,9 +280,7 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
       direct: direct.length,
       ts1: ts1.length,
       ts2plus: ts2.length,
-      corridors: new Set(
-        group.map((g) => [...(g.ts_ports ?? []), g.port_of_discharge].join(" > ")),
-      ).size,
+      corridors: new Set(group.map(routeLabel)).size,
       transit: spreadOf(group.map((g) => g.transit_time_days)),
       pods: [...new Set(group.map((g) => g.port_of_discharge))].sort(),
       nextEtd: dates[0] ?? null,
@@ -348,19 +364,27 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
 
 // ── shared ───────────────────────────────────────────────────────────────────────────
 
-/** Lanes present in a snapshot, busiest first — what the lane picker offers. */
+/**
+ * Lanes present in a snapshot, busiest first — what the lane picker offers.
+ *
+ * PORT COMPLEXES ARE ONE DESTINATION HERE TOO. Carriers publish Last CY as either `Los Angeles, CA`
+ * or `Long Beach, CA` for what is commercially the same delivery, and keying on the raw value split
+ * seven load ports into two lanes apiece — Ho Chi Minh -> Long Beach carried 69 departures that
+ * never appeared in the Ho Chi Minh -> Los Angeles table. Half a market missing from a comparison
+ * is worse than an extra entry in a lane picker, so the complex folds at lane level as well.
+ */
 export function lanesIn(rows: Schedule[]): Array<Lane & { departures: number }> {
   const groups = new Map<string, Schedule[]>();
   for (const c of dedupeConnections(rows)) {
-    const key = `${c.port_of_loading}\u0000${c.last_cy}`;
+    const key = `${canonicalPort(c.port_of_loading)}\u0000${canonicalPort(c.last_cy)}`;
     const bucket = groups.get(key);
     if (bucket) bucket.push(c);
     else groups.set(key, [c]);
   }
   return [...groups.values()]
     .map((group) => ({
-      pol: group[0].port_of_loading,
-      lastCy: group[0].last_cy,
+      pol: canonicalPort(group[0].port_of_loading),
+      lastCy: canonicalPort(group[0].last_cy),
       departures: group.length,
     }))
     .sort(
@@ -371,9 +395,14 @@ export function lanesIn(rows: Schedule[]): Array<Lane & { departures: number }> 
     );
 }
 
+// Matched on the port complex, not the string, so a lane named for a complex collects the rows each
+// carrier published under either berth. `canonicalPort` is idempotent — the complex name maps to
+// itself — so a lane named for an ordinary single port still matches exactly as before.
 const inLane = (rows: Schedule[], lane?: Lane) =>
   lane
-    ? rows.filter((r) => r.port_of_loading === lane.pol && r.last_cy === lane.lastCy)
+    ? rows.filter(
+        (r) => samePlace(r.port_of_loading, lane.pol) && samePlace(r.last_cy, lane.lastCy),
+      )
     : rows;
 
 /** Sorted distinct ETD days. Null ETDs are dropped — an unscheduled sailing is not a chance. */

@@ -28,7 +28,7 @@ register(
   import.meta.url,
 );
 
-const { carrierStats } = await import("../src/lib/analytics/lane.ts");
+const { carrierStats, corridorStats, lanesIn } = await import("../src/lib/analytics/lane.ts");
 const { laneVerdict } = await import("../src/lib/analytics/rfq.ts");
 
 let failed = 0;
@@ -152,6 +152,73 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   check("main service is the most-run routing", c.mainRoute.label, "USUAL > POD");
   check("...with its own count", c.mainRoute.connections, 9);
   check("...and its own median, not the best case", [c.mainRoute.median, c.transit.min], [30, 20]);
+}
+
+// ── MAIN SERVICE IS CHOSEN BY DATES, NOT CONNECTIONS ─────────────────────────────────
+//
+// A carrier can publish several onward vessels against one departure, so connection counts favour
+// routings that are DUPLICATED over routings that are FREQUENT. OOCL on Ho Chi Minh -> Los Angeles
+// showed it plainly: a Ningbo double-transship carried 8 connections across 2 dates while its
+// direct Long Beach service carried 3 across 3. Picking by connections named the 2 TS chain as the
+// main service of a carrier whose date columns read "4 direct" — a contradiction on a single row.
+{
+  const rows = [
+    // Duplicated: 2 departures, four onward vessels each.
+    ...[1, 3].flatMap((d) => [0, 1, 2, 3].map((v) => conn("C", day(d), 40, ["HUB", "HUB2"], "POD", `D${v}`))),
+    // Frequent: 3 departures, one connection each.
+    ...svc("C", 3, 30, [], "POD", 9),
+  ];
+  const c = carrierStats(rows, LANE)[0];
+  check("main service is the routing with most DATES", c.mainRoute.label, "POD");
+  check("...even though another has more connections", c.mainRoute.connections < 8, true);
+  check("...and the badge counts dates", c.mainRoute.dates, 3);
+  check("...so it does not contradict the date columns", [c.directDates, c.mainRoute.ts], [3, 0]);
+}
+
+// ── PORT COMPLEXES ARE ONE SERVICE ───────────────────────────────────────────────────
+//
+// Los Angeles and Long Beach are distinct ports and one harbour. Split, COSCO's direct sailings on
+// Ho Chi Minh -> Los Angeles were divided between the two berths, so its main service under-counted
+// and each half competed with the other to be named. A Long Beach discharge against a Los Angeles
+// Last CY was also flagged as having a rail leg, which is a truck move across one bay.
+{
+  const la = (etd, pod) => ({
+    ...conn("C", etd, 30, [], pod),
+    last_cy: "Los Angeles, CA",
+  });
+  const rows = [la(day(1), "Long Beach, CA"), la(day(3), "Long Beach, CA"), la(day(5), "Los Angeles, CA")];
+  const lane = { pol: "POL", lastCy: "Los Angeles, CA" };
+  const c = carrierStats(rows, lane)[0];
+  check("both berths are one service", c.mainRoute.label, "Los Angeles/Long Beach, CA");
+  check("...covering every date", c.mainRoute.dates, 3);
+  check("...counted as one corridor", c.corridors, 1);
+  check("...but the published berths are still listed", c.pods, ["Long Beach, CA", "Los Angeles, CA"]);
+  check("...and the corridor view agrees", corridorStats(rows, lane).length, 1);
+  check("...with no rail leg invented", corridorStats(rows, lane)[0].hasRailLeg, false);
+
+  // The exception is narrow: a genuinely different coast stays a different service.
+  const oak = [...rows, { ...la(day(7), "Oakland, CA") }];
+  check("a different port is still a different service", corridorStats(oak, lane).length, 2);
+}
+
+// ── ...AND ONE LANE, NOT TWO ─────────────────────────────────────────────────────────
+//
+// The same fact applies to Last CY. Carriers publish either berth as the delivery point, so keying
+// lanes on the raw string split seven load ports in two: Ho Chi Minh -> Long Beach held 69
+// departures that never appeared in the Ho Chi Minh -> Los Angeles table the reader was comparing.
+{
+  const cy = (etd, lastCy) => ({ ...conn("C", etd, 30, [], lastCy), last_cy: lastCy });
+  const rows = [cy(day(1), "Long Beach, CA"), cy(day(3), "Los Angeles, CA"), cy(day(5), "Oakland, CA")];
+  const ls = lanesIn(rows);
+  check("both berths are one lane", ls.map((l) => l.lastCy).sort(), ["Los Angeles/Long Beach, CA", "Oakland, CA"]);
+  check("...carrying every departure", ls.find((l) => /Long Beach/.test(l.lastCy)).departures, 2);
+  check(
+    "...and the lane collects rows published under either",
+    carrierStats(rows, { pol: "POL", lastCy: "Los Angeles/Long Beach, CA" })[0].sailDates,
+    2,
+  );
+  // A lane named for an ordinary port must still match exactly — no widening by accident.
+  check("an ordinary lane is unaffected", carrierStats(rows, { pol: "POL", lastCy: "Oakland, CA" })[0].sailDates, 1);
 }
 
 // ── DATES, NOT CONNECTIONS ───────────────────────────────────────────────────────────
