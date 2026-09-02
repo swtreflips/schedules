@@ -1,17 +1,17 @@
-// Regression tests for the carrier ranking that drives the RFQ shortlist.
+// Regression tests for the carrier ordering in the Analytics view.
 //
 //   npm run test:analytics
 //
-// WHY THIS EXISTS. The shortlist is a recommendation the team acts on — it decides which carriers
-// we ask forwarders to quote. It is also a composite, and a composite fails quietly: it keeps
-// returning three plausible carrier codes long after the reasoning behind them has broken. None of
-// these rules is visible by looking at the rendered table.
+// WHY THIS EXISTS. There is no score and no label here — the SORT is the recommendation. A reader
+// glances at the top row and calls that carrier. So the ordering is the product, and a broken
+// ordering fails silently: it keeps returning plausible carrier codes in a wrong sequence, and
+// nothing on screen says so. None of the rules below is visible by looking at the rendered table.
 //
-// The fixtures are synthetic but shaped from the real lanes, so the file needs no database.
-// Numbers verified against SQL on 2026-09-01, Qingdao -> Los Angeles and Semarang -> Los Angeles.
+// Fixtures are synthetic but shaped from the real lanes, so no database is needed. Ordering
+// verified against SQL on 2026-09-01 for Qingdao -> Los Angeles and Semarang -> Los Angeles.
 //
 // Node does not resolve extensionless relative imports; Vite and tsc "bundler" resolution do. The
-// hook below tries `<specifier>.ts`, so the tests exercise the REAL source rather than a copy.
+// hook tries `<specifier>.ts`, so these run against the REAL source rather than a copy.
 
 import { register } from "node:module";
 register(
@@ -29,7 +29,7 @@ register(
 );
 
 const { carrierStats } = await import("../src/lib/analytics/lane.ts");
-const { shortlist, laneVerdict } = await import("../src/lib/analytics/rfq.ts");
+const { laneVerdict } = await import("../src/lib/analytics/rfq.ts");
 
 let failed = 0;
 const check = (name, got, want) => {
@@ -43,15 +43,16 @@ const check = (name, got, want) => {
 };
 
 const LANE = { pol: "POL", lastCy: "CY" };
+const order = (rows) => carrierStats(rows, LANE).map((c) => c.carrier);
 
-/** One connection. `days` sets transit; `via` sets the transshipment path. */
-const conn = (carrier, etd, days, via = [], vessel = "V1") => ({
+const day = (n) => `2026-09-${String(n).padStart(2, "0")}`;
+const conn = (carrier, etd, days, via = [], pod = "POD", vessel = "V1") => ({
   carrier_code: carrier,
   mother_vessel: vessel,
   etd,
-  eta: `2026-10-${String((Number(etd.slice(-2)) + 20) % 28 + 1).padStart(2, "0")}`,
+  eta: null,
   port_of_loading: "POL",
-  port_of_discharge: "POD",
+  port_of_discharge: pod,
   last_cy: "CY",
   transit_time_days: days,
   transport_type: via.length ? "1 TS" : "Direct",
@@ -60,112 +61,106 @@ const conn = (carrier, etd, days, via = [], vessel = "V1") => ({
   vessel_sequence: [vessel, ...via.map((_, i) => `ON${i}`)],
   route_ports: [],
 });
+/** `count` sailings on distinct dates, all the same transit and routing. */
+const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
+  Array.from({ length: count }, (_, i) => conn(carrier, day(start + i * 2), days, via, pod, `${carrier}${i}`));
 
-const day = (n) => `2026-09-${String(n).padStart(2, "0")}`;
-const spread = (carrier, count, days, via, startDay = 1, step = 2) =>
-  Array.from({ length: count }, (_, i) => conn(carrier, day(startDay + i * step), days + (i % 3), via, `V${i}`));
-
-// ── THE CONNS TRAP — the bug this ranking exists to fix ──────────────────────────────
-//
-// A carrier can publish many connections against few departures: several onward vessels off one
-// feeder. Measured on the real lane, ONE showed 78 connections against HMM's 42 — but ONE's were
-// 9 dates inside 12 days while HMM's were 18 dates across 40. Ranked on connections ONE leads by
-// 2x; on the chance of getting a box away it is third.
-const manyConnsFewDates = [
-  // 3 dates, but 5 onward vessels each = 15 connections
-  ...[1, 2, 3].flatMap((d) =>
-    [0, 1, 2, 3, 4].map((v) => conn("FAKE", day(d), 40 + v, ["HUB"], `F${v}`)),
-  ),
-  // 8 dates spread over a month, 1 connection each = 8 connections
-  ...spread("REAL", 8, 30, ["HUB"], 1, 4),
-];
+// ── DIRECT COMES FIRST ───────────────────────────────────────────────────────────────
+// A direct booking has no hand-off where space can be lost, so direct sailing DATES lead the sort
+// regardless of how fast someone else's transshipped service looks.
 {
-  const cs = carrierStats(manyConnsFewDates, LANE);
-  const fake = cs.find((c) => c.carrier === "FAKE");
+  const rows = [
+    ...svc("FEW_DIRECT", 3, 30, []),
+    ...svc("FAST_TS", 12, 18, ["HUB"]), // faster and far more frequent, but transshipped
+  ];
+  check("direct outranks a faster transshipped service", order(rows)[0], "FEW_DIRECT");
+}
+
+// ── THEN THE SHALLOWEST ROUTING ──────────────────────────────────────────────────────
+// Average transshipments separates a carrier that always runs one hand-off from one that runs
+// two. On the real lane it alone splits WHL (1.00 TS, 25.5-day median) from HPL (2.00, 42.0).
+{
+  const rows = [
+    ...svc("ONE_HOP", 6, 34, ["HUB"]),
+    ...svc("TWO_HOP", 6, 33, ["HUB", "HUB2"]), // marginally faster, but doubles the hand-offs
+  ];
+  const cs = carrierStats(rows, LANE);
+  check("shallower routing wins on equal directness", cs[0].carrier, "ONE_HOP");
+  check("avg TS is reported per connection", [cs[0].avgTs, cs[1].avgTs], [1, 2]);
+}
+
+// ── THE TIEBREAK IS VOLUME-WEIGHTED ──────────────────────────────────────────────────
+//
+// Sorting on the MAIN SERVICE median let three departures beat twenty. On the real Semarang lane,
+// COS came second at 29 days off 3 sailings, ahead of HMM at 31 off 20. The overall median is
+// weighted by volume simply by being a median over every sailing, so it is what orders the table;
+// the main-service figure stays a column because what a carrier runs most is worth seeing.
+{
+  const rows = [
+    // Thin: one quick service, nothing else.
+    ...svc("THIN", 3, 29, ["HUB"]),
+    // Deep: a big service at 31, plus enough more at 31 to hold the overall median there.
+    ...svc("DEEP", 20, 31, ["HUB"], "POD", 1),
+  ];
+  const cs = carrierStats(rows, LANE);
+  const thin = cs.find((c) => c.carrier === "THIN");
+  const deep = cs.find((c) => c.carrier === "DEEP");
+  check("the thin carrier really is faster on its main service", thin.mainRoute.median < deep.mainRoute.median, true);
+  check("...but has far fewer sailings behind it", thin.mainRoute.connections < deep.mainRoute.connections, true);
+  check("...and does not outrank the deep service", order(rows), ["DEEP", "THIN"]);
+}
+
+// ── MAIN SERVICE IS THE ONE ACTUALLY RUN MOST ────────────────────────────────────────
+{
+  const rows = [
+    ...svc("X", 2, 20, ["RARE"], "POD", 1), // fast but rare
+    ...svc("X", 9, 30, ["USUAL"], "POD", 5), // what the carrier actually offers
+  ];
+  const c = carrierStats(rows, LANE)[0];
+  check("main service is the most-run routing", c.mainRoute.label, "USUAL > POD");
+  check("...with its own count", c.mainRoute.connections, 9);
+  check("...and its own median, not the best case", [c.mainRoute.median, c.transit.min], [30, 20]);
+}
+
+// ── DATES, NOT CONNECTIONS ───────────────────────────────────────────────────────────
+// Several onward vessels off one feeder are one chance to ship, not four. Measured on the real
+// lane, ONE published 78 connections against 9 departures inside a 12-day window.
+{
+  const rows = [
+    ...[1, 2, 3].flatMap((d) => [0, 1, 2, 3, 4].map((v) => conn("PADDED", day(d), 40, ["HUB"], "POD", `P${v}`))),
+    ...svc("REAL", 8, 40, ["HUB"], "POD", 1),
+  ];
+  const cs = carrierStats(rows, LANE);
+  const padded = cs.find((c) => c.carrier === "PADDED");
   const real = cs.find((c) => c.carrier === "REAL");
-  check("connection count favours the wrong carrier", fake.departures > real.departures, true);
-  check("sail dates favour the right one", real.sailDates > fake.sailDates, true);
-  check("chances follow dates, not connections", real.chances > fake.chances, true);
-  check("the real service is preferred", real.tier, "preferred");
-  check("the padded one is not", fake.tier !== "preferred", true);
+  check("connections favour the padded carrier", padded.departures > real.departures, true);
+  check("...but dates favour the real service", [real.sailDates, padded.sailDates], [8, 3]);
+  check("...and the real service ranks first", order(rows)[0], "REAL");
 }
 
-// ── THE SPEED GATE ───────────────────────────────────────────────────────────────────
-//
-// A slow carrier must not set the bar that excludes a fast one. On Qingdao, HPL tied CMA at 24.0
-// chances while running 8.5 days slower, and knocked COS — faster and more direct — off the list.
+// ── VERDICT ──────────────────────────────────────────────────────────────────────────
+// A lane with no direct service must read as a hard market, not an empty screen. It states the
+// market only — it does not name carriers; the sort does that.
 {
-  const rows = [
-    ...spread("BEST", 10, 20, [], 1, 3), // many direct, fast
-    ...spread("SLOW", 10, 34, ["HUB"], 1, 3), // equal volume, much slower
-    ...spread("GOOD", 5, 20, [], 2, 4), // fewer dates, fast
-  ];
-  const cs = carrierStats(rows, LANE);
-  const get = (n) => cs.find((c) => c.carrier === n);
-  check("slow carrier is not preferred", get("SLOW").tier !== "preferred", true);
-  check("slow carrier reads as slower", get("SLOW").vsLaneMedian > 0, true);
-  check("the fast, thinner carrier keeps its slot", get("GOOD").tier, "preferred");
-}
-
-// ── NO PADDING ───────────────────────────────────────────────────────────────────────
-// A thin lane may honestly support one or two names. Padding to three recommends a carrier the
-// data does not support, which is the mistake the view exists to prevent.
-{
-  const rows = [
-    ...spread("A", 10, 25, [], 1, 3),
-    ...spread("B", 8, 25, [], 1, 3), // same speed, fewer dates
-    ...spread("TINY", 1, 24, [], 5, 1), // fastest, but a single date
-  ];
-  const cs = carrierStats(rows, LANE);
-  const sl = shortlist(LANE, cs);
-  check("shortlist stops short of 3", sl.carriers.length, 2);
-  check("a single sailing date is never an option", cs.find((c) => c.carrier === "TINY").tier, "avoid");
-  check("the sentence names only the qualifiers", sl.sentence.includes("TINY"), false);
-}
-
-// ── THE GATE IS STRICT ON PURPOSE ────────────────────────────────────────────────────
-//
-// Being even slightly slower than the lane's median carrier disqualifies. That looks harsh — a
-// day on a 30-day transit is noise — but loosening it undoes the ranking. Re-measured on the real
-// Semarang lane, a +2-day tolerance readmits ONE, whose 78 connections are 9 dates inside a
-// 12-day window: precisely the carrier this model exists to demote. The gate is what keeps volume
-// from buying its way past speed, so it stays at the median.
-{
-  const rows = [
-    ...spread("FAST", 6, 25, [], 1, 4),
-    ...spread("BULK", 12, 27, [], 1, 2), // twice the dates, marginally slower
-  ];
-  const cs = carrierStats(rows, LANE);
-  const bulk = cs.find((c) => c.carrier === "BULK");
-  check("higher volume does not outrank being slower", bulk.tier !== "preferred", true);
-  check("...even with twice the sailing dates", bulk.sailDates > cs.find((c) => c.carrier === "FAST").sailDates, true);
-}
-
-// ── VERDICTS ─────────────────────────────────────────────────────────────────────────
-// A lane with no direct service must read as a hard market, not an empty screen.
-{
-  const allTs = carrierStats([...spread("A", 6, 30, ["HUB"]), ...spread("B", 6, 33, ["HUB"])], LANE);
+  const allTs = carrierStats([...svc("A", 6, 30, ["HUB"]), ...svc("B", 6, 33, ["HUB"])], LANE);
   check("no-direct lane reads tough", laneVerdict(LANE, allTs).tone, "tough");
-  check("...and still yields a shortlist", shortlist(LANE, allTs).carriers.length > 0, true);
+  check("...and names no carrier to quote", /quote/i.test(laneVerdict(LANE, allTs).detail), false);
 
-  const mostlyDirect = carrierStats([...spread("A", 8, 20, []), ...spread("B", 8, 21, [])], LANE);
-  check("direct-rich lane reads healthy", laneVerdict(LANE, mostlyDirect).tone, "healthy");
-
+  const direct = carrierStats([...svc("A", 8, 20, []), ...svc("B", 8, 21, [])], LANE);
+  check("direct-rich lane reads healthy", laneVerdict(LANE, direct).tone, "healthy");
   check("empty lane does not crash", laneVerdict(LANE, []).tone, "tough");
-  check("empty lane gives an open-quote sentence", shortlist(LANE, []).carriers.length, 0);
 }
 
 // ── NULLS ────────────────────────────────────────────────────────────────────────────
-// transit_time_days is nullable and really is null in production. Unmeasured is not fast.
+// transit_time_days is nullable and really is null in production. Unmeasured is not fast, so a
+// carrier with no published transit must sort last rather than first.
 {
-  const cs = carrierStats(
-    [...spread("KNOWN", 6, 25, []), ...[1, 3, 5, 7].map((d) => conn("UNKNOWN", day(d), null, []))],
-    LANE,
-  );
+  const rows = [...svc("KNOWN", 6, 25, []), ...[1, 3, 5, 7].map((d) => conn("UNKNOWN", day(d), null, []))];
+  const cs = carrierStats(rows, LANE);
   const unk = cs.find((c) => c.carrier === "UNKNOWN");
-  check("null transit stays null", unk.vsLaneMedian, null);
-  check("...and never reaches preferred", unk.tier !== "preferred", true);
-  check("...and produces no NaN", Number.isNaN(unk.chances), false);
+  check("null transit stays null", [unk.transit.median, unk.vsLaneMedian], [null, null]);
+  check("...produces no NaN", Number.isNaN(unk.avgTs), false);
+  check("...and sorts behind a measured carrier", order(rows), ["KNOWN", "UNKNOWN"]);
 }
 
 console.log(failed ? `\n${failed} failure(s)` : "\nall checks passed");

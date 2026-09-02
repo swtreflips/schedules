@@ -1,7 +1,6 @@
 import type { Schedule } from "../../types/schedule";
 import { compareDateAsc } from "../compare";
 import {
-  averageGapDays,
   dedupeConnections,
   spreadOf,
   tsCount,
@@ -28,22 +27,15 @@ export interface Lane {
 }
 
 /**
- * How much a sailing date is worth, by how many transshipment hand-offs can go wrong.
+ * NO COMPOSITE SCORE, AND NO TIER LABEL.
  *
- * Direct has none; 1 TS has one; 2 TS or more has at least two, each a place where space is lost
- * or a connection missed. This encodes the operating priority — most direct first, then an
- * efficient 1 TS, then 2 TS — as weights rather than as a sort order, so a carrier with ten 1 TS
- * dates is not beaten by one with a single direct sailing.
- *
- * EXPORTED AND SHOWN IN THE UI on purpose. A composite nobody can audit gets ignored the first
- * time it disagrees with someone's judgement; one whose weights are visible can be argued with.
+ * An earlier version ranked carriers with a weighted "chances" number and tagged each row
+ * Preferred / Viable / Avoid. Both are gone deliberately: a score asks the reader to trust an
+ * arithmetic they did not choose, and a label states the conclusion instead of letting them reach
+ * it. The columns and the sort now carry the argument — the carrier at the top has the most direct
+ * sailings, the shallowest transshipments and a transit backed by volume, and that is visible
+ * without a badge saying so.
  */
-export const CHANCE_WEIGHTS = { direct: 3, ts1: 1, ts2plus: 0.25 } as const;
-
-export type Tier = "preferred" | "viable" | "avoid";
-
-/** How many carriers to name in an RFQ. Not a floor — a thin lane may honestly support fewer. */
-export const SHORTLIST_MAX = 3;
 
 // ── View A: corridors ────────────────────────────────────────────────────────────────
 
@@ -142,12 +134,24 @@ export interface CarrierRow {
   transit: Spread;
   pods: string[];
   nextEtd: string | null;
-  avgGapDays: number | null;
-  /** Weighted sailing dates — see CHANCE_WEIGHTS. */
-  chances: number;
+  /**
+   * Mean transshipments per connection. The single clearest quality signal on a lane: it separates
+   * a carrier that always runs one hand-off from one that routinely runs two, and it tracks
+   * transit directly — measured on Semarang -> Los Angeles, 1.00 for WHL at a 25.5-day median
+   * against 2.00 for HPL at 42.0.
+   */
+  avgTs: number;
+  /**
+   * The routing this carrier actually runs MOST, with the transit that routing delivers.
+   *
+   * This is the honest headline transit, not the best case. A carrier's fastest sailing can be a
+   * one-off: WHL shows a 15-day best case on this lane while the service it actually offers —
+   * Taipei, 8 sailings — runs a 20.5-day median. Booking against the 15 would be booking against
+   * something that happened once.
+   */
+  mainRoute: { label: string; connections: number; median: number | null } | null;
   /** Signed days against the lane's median carrier. Negative is faster. */
   vsLaneMedian: number | null;
-  tier: Tier;
   /**
    * True when this carrier shows no direct sailing in the snapshot. NOT the same as "runs none".
    *
@@ -160,15 +164,15 @@ export interface CarrierRow {
 }
 
 /**
- * Per-carrier summary for a lane, tiered for the procurement decision.
+ * Per-carrier summary for a lane.
  *
- * The question this answers is not "who is fastest" but "who should we ask forwarders to quote" —
- * which is about the chance of securing space at a competitive transit.
+ * The question is not "who is fastest" but "whose space can a forwarder actually get, at a transit
+ * we can live with" — so the table leads with how many DIRECT sailing dates a carrier offers, then
+ * how deep its transshipments run, then the transit its main service actually delivers.
  *
- * SPEED IS A GATE, NOT A COMPONENT. Folding transit into `chances` produces a wrong shortlist.
- * Measured on Qingdao -> Los Angeles, HPL ties CMA at 24.0 chances while running 8.5 days slower,
- * and would displace COS — which is faster and more direct — from the top three. Kept as separate
- * axes, the tier stays legible and the table can be argued with.
+ * THE SORT IS THE ARGUMENT. Ordered by direct dates, then fewest transshipments, then the median
+ * of the routing each carrier runs most. No score and no label: the carrier worth calling is the
+ * one at the top, and every column that put it there is on the row.
  */
 export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
   const conns = dedupeConnections(inLane(rows, lane));
@@ -180,7 +184,7 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
     else groups.set(c.carrier_code, [c]);
   }
 
-  type Draft = Omit<CarrierRow, "vsLaneMedian" | "tier">;
+  type Draft = Omit<CarrierRow, "vsLaneMedian">;
   const drafts: Draft[] = [];
 
   for (const [carrier, group] of groups) {
@@ -192,6 +196,29 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
     const directDates = distinctDates(direct).length;
     const ts1Dates = distinctDates(ts1).length;
     const ts2Dates = distinctDates(ts2).length;
+
+    // The routing this carrier runs most, and what THAT delivers — the transit actually on offer
+    // rather than its luckiest sailing. Ties broken by the faster median, so a carrier running two
+    // services equally often is represented by the better of them.
+    const byRoute = new Map<string, Schedule[]>();
+    for (const g of group) {
+      const label = [...(g.ts_ports ?? []), g.port_of_discharge].join(" > ");
+      const b = byRoute.get(label);
+      if (b) b.push(g);
+      else byRoute.set(label, [g]);
+    }
+    const mainRoute =
+      [...byRoute.entries()]
+        .map(([label, rows2]) => ({
+          label,
+          connections: rows2.length,
+          median: spreadOf(rows2.map((r) => r.transit_time_days)).median,
+        }))
+        .sort(
+          (a, b) =>
+            b.connections - a.connections ||
+            (a.median ?? Infinity) - (b.median ?? Infinity),
+        )[0] ?? null;
 
     drafts.push({
       carrier,
@@ -210,13 +237,8 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
       transit: spreadOf(group.map((g) => g.transit_time_days)),
       pods: [...new Set(group.map((g) => g.port_of_discharge))].sort(),
       nextEtd: earliestEtd(group),
-      avgGapDays: averageGapDays(group.map((g) => g.etd)),
-      chances:
-        Math.round(
-          (CHANCE_WEIGHTS.direct * directDates +
-            CHANCE_WEIGHTS.ts1 * ts1Dates +
-            CHANCE_WEIGHTS.ts2plus * ts2Dates) * 100,
-        ) / 100,
+      avgTs: Math.round((group.reduce((n, g) => n + tsCount(g), 0) / group.length) * 100) / 100,
+      mainRoute,
       directUnknown: direct.length === 0,
     });
   }
@@ -238,53 +260,43 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
       ? Math.round((d.transit.median - laneMedian) * 10) / 10
       : null;
 
-  // THE SPEED GATE IS APPLIED BEFORE RANKING, not after.
+  // THE SORT IS THE ARGUMENT.
   //
-  // Ranking everyone together and then taking a top third lets a slow carrier set the bar that
-  // excludes a fast one. Measured on Qingdao -> Los Angeles: HPL scores 24.0 on nine slow 1 TS
-  // dates, which pushed the third-place cutoff to 24 and dropped COS (7 direct dates, 1 day
-  // FASTER than the lane) out of the shortlist. Ranking only among carriers that clear the gate
-  // removes that interference entirely.
+  // Direct sailing dates first: a direct booking has no hand-off to lose space at, and more dates
+  // means more chances to get one away. Then the shallowest average transshipment, which on its
+  // own separates WHL at 1.00 TS and a 25.5-day median from HPL at 2.00 and 42.0.
   //
-  // A carrier with no published transit never clears it: unmeasured is not the same as fast.
-  const eligible = drafts
-    .filter((d) => {
-      const vs = vsLane(d);
-      return vs != null && vs <= 0;
-    })
-    .sort((a, b) => b.chances - a.chances);
+  // Then THIN SERVICES DROP BEHIND SUBSTANTIAL ONES, before speed is considered at all.
+  //
+  // A fast median off three departures is not the same claim as a fast median off twenty, and
+  // without this the smaller number simply wins. Ordering on the overall median alone put COS
+  // second on the real Semarang lane — 29 days across 3 sailings, ahead of HMM's 31 across 20.
+  // That looked fixed when COS's other, slower sailings dragged its overall median to 36, but
+  // that was luck: a carrier whose whole service is small and quick still jumped the queue.
+  //
+  // "Thin" is relative to the lane, because a well-served lane and a quiet one cannot share an
+  // absolute threshold. A quarter of the best-served carrier's dates is the line.
+  const mostDates = Math.max(0, ...drafts.map((d) => d.sailDates));
+  const thin = (d: Draft) => d.sailDates < mostDates * 0.25;
 
-  // Floor at a quarter of the leader, so a thin carrier is never padded into the list just to
-  // reach three names. Semarang stops at two (HMM, WHL) rather than adding EMC's four dates.
-  const floor = (eligible[0]?.chances ?? 0) * 0.25;
-  const preferred = new Set(
-    eligible.filter((d) => d.chances >= floor).slice(0, SHORTLIST_MAX).map((d) => d.carrier),
-  );
-
-  const ranked = [...drafts].sort((a, b) => b.chances - a.chances);
-  const bottom = ranked[Math.min(ranked.length - 1, Math.floor((ranked.length * 2) / 3))]?.chances ?? 0;
-
+  // Only then speed, and by the carrier's OVERALL median rather than its main service — the
+  // overall figure covers everything it runs, where a main-service median can rest on a handful.
+  // The main-service figure stays a COLUMN: what a carrier runs most is worth seeing, it is just
+  // not what should order the table.
+  //
+  // Nulls sort last throughout: a carrier that has published no transit is not a fast one.
   return drafts
-    .map((d): CarrierRow => {
-      const vs = vsLane(d);
-      const slower = vs != null && vs > 0;
-
-      let tier: Tier = "viable";
-      if (preferred.has(d.carrier)) tier = "preferred";
-      // One sailing date is not an option a forwarder can work with, however fast it is.
-      else if (d.sailDates <= 1 || (d.chances <= bottom && slower)) tier = "avoid";
-
-      return { ...d, vsLaneMedian: vs, tier };
-    })
+    .map((d): CarrierRow => ({ ...d, vsLaneMedian: vsLane(d) }))
     .sort(
       (a, b) =>
-        TIER_ORDER[a.tier] - TIER_ORDER[b.tier] ||
-        b.chances - a.chances ||
+        b.directDates - a.directDates ||
+        a.avgTs - b.avgTs ||
+        Number(thin(a)) - Number(thin(b)) ||
+        (a.transit.median ?? Infinity) - (b.transit.median ?? Infinity) ||
+        b.sailDates - a.sailDates ||
         a.carrier.localeCompare(b.carrier),
     );
 }
-
-const TIER_ORDER: Record<Tier, number> = { preferred: 0, viable: 1, avoid: 2 };
 
 // ── shared ───────────────────────────────────────────────────────────────────────────
 
@@ -292,7 +304,7 @@ const TIER_ORDER: Record<Tier, number> = { preferred: 0, viable: 1, avoid: 2 };
 export function lanesIn(rows: Schedule[]): Array<Lane & { departures: number }> {
   const groups = new Map<string, Schedule[]>();
   for (const c of dedupeConnections(rows)) {
-    const key = `${c.port_of_loading} ${c.last_cy}`;
+    const key = `${c.port_of_loading}\u0000${c.last_cy}`;
     const bucket = groups.get(key);
     if (bucket) bucket.push(c);
     else groups.set(key, [c]);
