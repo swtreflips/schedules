@@ -996,3 +996,10 @@ input[type="number"] {
 /* First and last sailing in one cell — a service that is ending reads differently from one
    that is merely small. */
 .an-window { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 11.5px; }
+
+/* Report actions sit at the right of the analytics header. The report covers the whole market,
+   so it belongs beside the lane picker rather than inside a lane's section. */
+.an-report { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
+.an-copy--quiet { color: var(--color-muted); border-color: var(--color-rule); }
+.an-copy:disabled { opacity: 0.45; cursor: default; }
+.an-copy:disabled:hover { background: transparent; color: var(--color-muted); }

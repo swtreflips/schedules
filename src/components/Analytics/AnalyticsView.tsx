@@ -8,6 +8,7 @@ import {
   type Lane,
 } from "../../lib/analytics/lane";
 import { laneVerdict } from "../../lib/analytics/rfq";
+import { ReportButton } from "./ReportButton";
 import type { Spread } from "../../lib/analytics/departures";
 
 /**
@@ -90,6 +91,7 @@ export function AnalyticsView() {
           {snapshotAt && <> · snapshot {snapshotAt.slice(0, 10)}</>}
         </span>
         <span className="an-meta an-dim">whole current market — not filtered by the search above</span>
+        <ReportButton rows={rows} snapshotAt={snapshotAt} />
       </div>
 
       <div className="an-scroll">
