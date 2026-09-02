@@ -110,6 +110,38 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   check("...and does not outrank the deep service", order(rows), ["DEEP", "THIN"]);
 }
 
+// ── ...BUT A MATERIALLY FASTER THIN SERVICE IS NOT BURIED ────────────────────────────
+//
+// The thin rule stops 3 sailings outranking 20 on a two-day edge. It must not bury a real
+// advantage: on Semarang -> Savannah, EMC runs 4 dates at a 44.5-day median against a 54.5-day
+// lane — ten days, 18% — and sank below carriers it beats outright. Naming a carrier in an RFQ is
+// a rate request, not a booking, so a candidate that good has to surface and let the reader judge
+// its four dates. The margin is relative (10% of the lane median), which is why the 3% case above
+// still sinks and this one does not.
+{
+  const rows = [
+    ...svc("BULK", 20, 55, ["HUB"]),
+    ...svc("BULK2", 16, 54, ["HUB"]),
+    ...svc("QUICK", 4, 44, ["HUB"]), // few dates, but ~19% under the lane
+  ];
+  const cs = carrierStats(rows, LANE);
+  const quick = cs.find((c) => c.carrier === "QUICK");
+  check("a thin service is still thin", quick.sailDates < cs.find((c) => c.carrier === "BULK").sailDates, true);
+  check("...but a material gain is not demoted", order(rows)[0], "QUICK");
+  check("...and it is genuinely faster than the lane", quick.vsLaneMedian < 0, true);
+}
+
+// ── SAILING WINDOW: SMALL IS NOT THE SAME AS ENDING ──────────────────────────────────
+// EMC's four dates ran Aug 30 to Sep 12 while HMM ran to Oct 23. Both look thin in a count; only
+// the window says one of them is closing.
+{
+  const rows = [...svc("ENDING", 4, 40, ["HUB"], "POD", 1), ...svc("ONGOING", 4, 40, ["HUB"], "POD", 15)];
+  const cs = carrierStats(rows, LANE);
+  const ending = cs.find((c) => c.carrier === "ENDING");
+  check("first and last sailing are both reported", [ending.nextEtd, ending.lastEtd], ["2026-09-01", "2026-09-07"]);
+  check("...and differ from a later service", cs.find((c) => c.carrier === "ONGOING").nextEtd, "2026-09-15");
+}
+
 // ── MAIN SERVICE IS THE ONE ACTUALLY RUN MOST ────────────────────────────────────────
 {
   const rows = [

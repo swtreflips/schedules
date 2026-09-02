@@ -150,6 +150,15 @@ export interface CarrierRow {
    * something that happened once.
    */
   mainRoute: { label: string; connections: number; median: number | null } | null;
+  /**
+   * Last published sailing, beside the next one.
+   *
+   * A service can be thin because it is small, or thin because it is ENDING, and those call for
+   * different decisions. On Semarang -> Savannah, EMC's four dates run Aug 30 to Sep 12 while HMM
+   * runs to Oct 23 — fine for a box moving in the next ten days, useless for anything planned
+   * beyond that. Without this the two look identical.
+   */
+  lastEtd: string | null;
   /** Signed days against the lane's median carrier. Negative is faster. */
   vsLaneMedian: number | null;
   /**
@@ -236,7 +245,8 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
       ).size,
       transit: spreadOf(group.map((g) => g.transit_time_days)),
       pods: [...new Set(group.map((g) => g.port_of_discharge))].sort(),
-      nextEtd: earliestEtd(group),
+      nextEtd: dates[0] ?? null,
+      lastEtd: dates[dates.length - 1] ?? null,
       avgTs: Math.round((group.reduce((n, g) => n + tsCount(g), 0) / group.length) * 100) / 100,
       mainRoute,
       directUnknown: direct.length === 0,
@@ -276,8 +286,24 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
   //
   // "Thin" is relative to the lane, because a well-served lane and a quiet one cannot share an
   // absolute threshold. A quarter of the best-served carrier's dates is the line.
+  //
+  // BUT A THIN SERVICE THAT IS MATERIALLY FASTER IS NOT DEMOTED. The rule exists to stop three
+  // sailings outranking twenty on a two-day edge; it was never meant to bury a real advantage.
+  // On Semarang -> Savannah, EMC runs 4 dates at a 44.5-day median against a 54.5-day lane —
+  // ten days, 18% — and sank to last behind carriers it beats outright. Naming a carrier in an
+  // RFQ costs nothing (it is a rate request, not a booking), so a candidate that good has to
+  // surface and let the reader weigh its 4 dates for themselves.
+  //
+  // The margin is relative, not absolute: 10% of the lane median. It clears EMC's 18% while still
+  // catching the case the rule was built for — 29 days against a 30-day lane is 3%, and stays
+  // demoted.
   const mostDates = Math.max(0, ...drafts.map((d) => d.sailDates));
-  const thin = (d: Draft) => d.sailDates < mostDates * 0.25;
+  const MATERIAL_GAIN = 0.1;
+  const materiallyFaster = (d: Draft) => {
+    const v = vsLane(d);
+    return v != null && laneMedian != null && laneMedian > 0 && -v / laneMedian >= MATERIAL_GAIN;
+  };
+  const thin = (d: Draft) => d.sailDates < mostDates * 0.25 && !materiallyFaster(d);
 
   // Only then speed, and by the carrier's OVERALL median rather than its main service — the
   // overall figure covers everything it runs, where a main-service median can rest on a handful.

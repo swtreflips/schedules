@@ -115,8 +115,9 @@ export function AnalyticsView() {
                 <th title="The routing this carrier runs most often">Main service</th>
                 <th className="an-num" title="Median transit of that main service — what is on offer repeatedly, not the best case">Its transit</th>
                 <th className="an-num">All sailings — median / range</th>
+                <th className="an-num" title="Slowest minus fastest. A wide spread means the transit you were quoted is not the one you can count on.">Spread</th>
                 <th className="an-num" title="Against the lane's median carrier">vs lane</th>
-                <th>Next ETD</th>
+                <th title="First and last published sailing. A service ending soon is thin in a different way from a small one.">Sailing window</th>
                 <th title="When this carrier was last scraped">Scraped</th>
               </tr>
             </thead>
@@ -155,8 +156,20 @@ export function AnalyticsView() {
                   </td>
                   <td className="an-num an-strong">{fmt(c.mainRoute?.median ?? null)}</td>
                   <SpreadCell s={c.transit} />
+                  {/* Its own column because it decides bookings and was unreadable inside the
+                      range. On Semarang -> Savannah, HMM has the most sailings on the lane and a
+                      27-day spread (38-65) against MSC's 10 (40-50): the most-served carrier is
+                      also the least predictable, which the median alone conceals. */}
+                  <td className={"an-num " + (c.transit.spread != null && c.transit.spread >= 20 ? "an-slow" : "")}>
+                    {c.transit.spread == null ? "—" : `${c.transit.spread}d`}
+                  </td>
                   <VsLane v={c.vsLaneMedian} />
-                  <td>{c.nextEtd?.slice(0, 10) ?? "—"}</td>
+                  <td className="an-window">
+                    {c.nextEtd?.slice(5, 10) ?? "—"}
+                    {c.lastEtd && c.lastEtd !== c.nextEtd && (
+                      <span className="an-dim"> → {c.lastEtd.slice(5, 10)}</span>
+                    )}
+                  </td>
                   <td className="an-dim">{scrapedByCarrier.get(c.carrier)?.slice(0, 10) ?? "—"}</td>
                 </tr>
               ))}
@@ -165,10 +178,13 @@ export function AnalyticsView() {
           <p className="an-foot">
             <strong>Its transit</strong> is the median of the service each carrier runs most, not
             its fastest sailing — a one-off quick crossing is not what gets booked repeatedly.
-            <strong> Dates</strong> counts distinct departures, not connections: several onward
-            vessels off one feeder are one chance to ship, not four. <strong>Direct</strong> reads
-            “none” when this snapshot holds no direct sailing, which is not the same as the carrier
-            running none.
+            <strong> Spread</strong> is what the median hides: the most-served carrier on a lane is
+            often the least predictable, and a 27-day spread means the transit you were quoted is
+            not the one you can count on. <strong>Sailing window</strong> separates a service that
+            is small from one that is <em>ending</em>. <strong>Dates</strong> counts distinct
+            departures, not connections: several onward vessels off one feeder are one chance to
+            ship, not four. <strong>Direct</strong> reads “none” when this snapshot holds no direct
+            sailing, which is not the same as the carrier running none.
           </p>
         </section>
 

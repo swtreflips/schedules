@@ -992,3 +992,7 @@ input[type="number"] {
   text-transform: none;
   color: var(--color-faint);
 }
+
+/* First and last sailing in one cell — a service that is ending reads differently from one
+   that is merely small. */
+.an-window { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 11.5px; }
