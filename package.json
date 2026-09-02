@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:analytics": "node --experimental-strip-types --no-warnings tools/check-analytics.mjs",
+    "test": "npm run test:analytics"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.2",

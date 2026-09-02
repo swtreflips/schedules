@@ -913,3 +913,82 @@ input[type="number"] {
 
 .an-state { padding: 24px 12px; font-family: var(--font-mono); font-size: 11.5px; color: var(--color-muted); }
 .an-error { color: var(--color-accent); }
+
+/* ── Analytics v2: verdict, RFQ line, tiers ──────────────────────────────────
+   Ordered for a glance — what kind of market, who to ask, then the evidence. */
+
+.an-verdict {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--color-rule-strong);
+  background: var(--color-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.an-verdict strong { font-size: 13px; letter-spacing: -0.01em; }
+.an-verdict span { font-size: 12px; color: var(--color-muted); }
+/* Tone is carried by the rule, not a fill — a red panel would shout on a lane that is merely
+   ordinary, and this screen is read many times a day. */
+.an-verdict--healthy { border-left-color: var(--color-secondary); }
+.an-verdict--mixed   { border-left-color: var(--color-faint); }
+.an-verdict--tough   { border-left-color: var(--color-accent); }
+
+/* The RFQ line is the output of the whole view: it gets pasted into an email. */
+.an-rfq { margin-top: 14px; padding: 12px; border: 1px solid var(--color-rule-strong); }
+.an-rfq__top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.an-rfq__line {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--color-ink);
+  margin: 0 0 8px;
+}
+.an-rfq__why, .an-rfq__avoid { margin: 0; padding-left: 16px; font-size: 11.5px; color: var(--color-muted); }
+.an-rfq__why li, .an-rfq__avoid li { margin-top: 2px; }
+.an-rfq__avoid { margin-top: 8px; }
+.an-rfq__avoid li::marker { color: var(--color-accent); }
+
+.an-copy {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  background: transparent;
+  color: var(--color-secondary);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-none);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.an-copy:hover { background: var(--color-ink); color: var(--color-bg); }
+.an-copy:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* Tier as a left rule and a small word — never a row fill. Nine tinted rows would be a
+   traffic-light table nobody can read a number out of. */
+.an-tier td:first-child { border-left: 3px solid transparent; padding-left: 9px; }
+.an-tier--preferred td:first-child { border-left-color: var(--color-secondary); }
+.an-tier--avoid td:first-child { border-left-color: var(--color-accent); }
+.an-tierlabel {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+  font-weight: 400;
+}
+.an-tier--preferred .an-tierlabel { color: var(--color-secondary); }
+.an-tier--avoid .an-tierlabel { color: var(--color-accent); }
+
+.an-strong { font-weight: 500; }
+.an-fast { color: var(--color-secondary); }
+.an-slow { color: var(--color-accent); }
+
+.an-weights {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--color-faint);
+}
