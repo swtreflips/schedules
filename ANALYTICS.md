@@ -47,7 +47,7 @@ Everything in this document is phase 1 unless explicitly marked.
 | | Status | Where |
 |---|---|---|
 | Fetch + paging, whole current market | **shipped** | `src/state/useMarketSnapshot.ts` |
-| Connection dedupe, spread, cadence | **shipped** | `src/lib/analytics/departures.ts` |
+| Option model, dedupe, spread, cadence | **shipped** | `src/lib/analytics/departures.ts` |
 | Port-complex folding | **shipped** | `src/lib/analytics/ports.ts` |
 | View A — corridor **list** | **shipped** | `corridorStats()` |
 | View B — carrier comparison, per lane | **shipped** | `carrierStats()` |
@@ -213,22 +213,66 @@ collapsing *within* one.
 
 Implemented as `dedupeConnections()` in `src/lib/analytics/departures.ts`.
 
-### Connections vs sail dates
+### The unit that is actually counted: an OPTION
 
-Because a connection is an *option*, not a departure, the two counts answer different questions and
-**both are shown**:
+A connection is still not the unit. **A forwarder quotes a CHAIN.** "Direct to Norfolk on the 10th"
+and "via Taipei on the 10th" are two things you can ask for — one may come back and the other not,
+and if both do you take the direct. That is the unit, and neither count above is it.
+
+```
+an OPTION = (carrier, ETD date, chain)
+```
+
+Both earlier counts distort it, in opposite directions. Measured on the live snapshot:
+
+- **Connections over-count, by up to 22×.** ONE publishes `Singapore > Los Angeles/Long Beach` on
+  2026-09-10 as **22 connections** — 22 onward vessels on one chain on one day. One quotable thing,
+  counted twenty-two times. **583 of 1,773** options were inflated this way.
+- **Dates under-count, on a fifth of the data.** **334 of 1,707** (carrier, lane, date) cells carry
+  more than one chain. ONE out of Pipavav → Chicago on 2026-09-10 reads as **1 date** and is
+  **8 options**: direct to LA, direct to Oakland, and six Singapore transships to LA, New York,
+  Oakland, Tacoma, Norfolk and Halifax. Six different answers to *"can you do it"*, collapsed to one.
+
+Market-wide: **2,909 connections → 1,742 options.**
+
+Implemented as `toOptions()` in `departures.ts`, built on `dedupeConnections`.
+
+### Options and dates are both shown, and both earn it
 
 | | Counts | Answers |
 |---|---|---|
-| **Connections** | bookable options | how many ways there are |
-| **Sail dates** | distinct ETD days | **how many chances there are to get a box away** |
+| **Options** | chain × day | **what you can ask a forwarder for** |
+| **Sail dates** | distinct ETD days | when a box can actually leave |
 
-Sail dates is the headline. On Semarang → Los Angeles, ONE shows 78 connections against HMM's 42 —
-but ONE's are 9 departures inside a 12-day window while HMM's are 18 dates across 40 days. Ranked on
-connections ONE leads two to one; on the chance of shipping it is clearly third.
+Twenty options across three days is not the same proposition as twenty across twenty. Measured, they
+**differ on 38% of carrier-lane cells** — median ratio 1.5×, worst 8× — so the second column is not
+a restatement of the first.
 
-Never `rows.length`. Never `count(*)`. **Deduplicate before any metric is computed**, not per view —
-otherwise the views disagree about how much service exists.
+### An option's transit is the MEDIAN of its arrivals
+
+An option published against several onward vessels has several arrival dates. It carries their
+median, not their best: a fastest sailing can be a one-off, which is the same reasoning `mainRoute`
+already applies to routings.
+
+This also removes a weighting fault. Aggregating over connections let a chain published 22 times
+pull a carrier's median 22 times — the very thing that makes connections a bad count.
+
+**The cost, stated plainly:** spread *inside* an option is no longer visible anywhere. 199 options
+carry arrivals that differ from each other, and the extremes are wide — COS `Shanghai > New York`
+on 2026-09-18 has arrivals spanning **43 to 69 days** and reports **48**. See §Known weaknesses.
+
+### The invariant this buys
+
+**Direct + 1 TS + 2+ TS === Options, by construction.** An option has exactly one routing depth, so
+nothing has to be collapsed to make the columns add up.
+
+The previous model counted *dates* and needed a rule: classify each date by its shallowest routing,
+or a carrier offering a 1 TS and a 2 TS on one departure appeared in two columns and the breakdown
+did not sum. That rule is deleted. Asserted on live data across **255 carrier-lane cells on 54
+lanes** in `tools/check-analytics.mjs`.
+
+Never `rows.length`. Never `count(*)`. **Reduce to options before any metric is computed**, not per
+view — otherwise the views disagree about how much service exists.
 
 ## Port names must be normalised first
 
@@ -355,7 +399,7 @@ Seattle/Tacoma and New York/Newark named as plausible next entries that are *not
 **The complex folds at lane level too**, which the earlier draft did not anticipate. Carriers
 publish Last CY as either `Los Angeles, CA` or `Long Beach, CA` for what is commercially one
 delivery; keying the lane on the raw value split seven load ports into two lanes apiece, and Ho Chi
-Minh → Long Beach carried 69 departures that never appeared in the Ho Chi Minh → Los Angeles table.
+Minh → Long Beach carried 69 options that never appeared in the Ho Chi Minh → Los Angeles table.
 Half a market missing from a comparison is worse than an extra row in a lane picker.
 
 Scope is routing identity only: transshipment counts still come from `ts_ports`, and
@@ -364,12 +408,13 @@ it.
 
 ## Per-corridor metrics
 
-Shipped in `CorridorRow`: via path · POD · TS count · rail-leg flag · **sail dates** · connections ·
+Shipped in `CorridorRow`: via path · POD · TS count · rail-leg flag · **options** · sail dates ·
 carriers · transit **min / median / max** · next ETD.
 
-**Dates and connections are both shown, and dates is the headline.** One departure can be published
-as several bookable connections when a carrier offers different onward vessels off the same feeder —
-four arrivals a customer could be sold, but one chance to get a box away. See Counting Rules.
+**Options is the headline, dates the secondary.** It is tempting to think they must match here,
+since the chain is fixed within a corridor row — they do not. A corridor spans carriers, so two of
+them sailing one routing on one day are two things you can be quoted and one day you can leave. See
+Counting Rules.
 
 ## Why spread, not average
 
@@ -422,27 +467,28 @@ Scoped to **one lane at a time**, driven by the lane picker — not the whole ma
 
 ## Metrics — as shipped in `CarrierRow`
 
-Direct / 1 TS / 2+ TS **dates** · total dates · avg TS · main service and its median · all-sailings
-median / range · spread · vs lane · sailing window · last scraped.
+Direct / 1 TS / 2+ TS **options** · options · sail dates · avg TS · main service and its median ·
+all-options median / range · spread · vs lane · sailing window · last scraped.
 
 Three of these were not in the original list and each exists because a measured row was misleading
 without it:
 
-**Direct / 1 TS / 2+ TS count DATES, each under its best routing that day.** Counting dates per
-routing type made the columns overlap — HPL on Semarang → Savannah sails 7 dates and offers both a
-1 TS and a 2 TS on three of them, so the columns read 7 and 3 against 7 total, invited addition and
-did not add up. Classifying each date by its **shallowest** option is also the operationally true
-reading: given a direct and a 2 TS the same day you book the direct, so that is what the day is
-worth. The three now always sum to Dates. Routing depth is not lost — `avgTs` still measures it
-across every connection.
+**Direct / 1 TS / 2+ TS count OPTIONS, and sum to Options by construction.** This used to count
+dates, which forced a rule: classify each date by its shallowest routing, or a carrier offering a
+1 TS and a 2 TS on one departure appeared in two columns and the breakdown did not add up. An option
+has exactly one routing depth, so there is nothing to collapse and nothing to explain. `avgTs` is
+option-weighted for the same reason it is counted that way — connection-weighting let a chain
+published against 22 vessels count 22 times toward a carrier's routing depth.
 
-**Main service** is the routing a carrier runs on the most dates, with the median *that* routing
-delivers — the honest headline, not the best case. WHL shows a 15-day best on Semarang → Los Angeles
-while the service it actually offers runs 20.5. Chosen by dates rather than connections, because
-connections name routings that are merely *duplicated* rather than frequent: OOCL on Ho Chi Minh →
-Los Angeles had a Ningbo double-transship with 8 connections across 2 dates against a direct with 3
-across 3, so connections named the 2 TS chain as its main service on a row whose date columns read
-4 direct — a flat contradiction on one line.
+**Main service** is the routing a carrier offers the most options on, with the median *that*
+routing delivers — the honest headline, not the best case. WHL shows a 15-day best on Semarang →
+Los Angeles while the service it actually offers runs 20.5.
+
+Counting options removes a trap rather than guarding against it. Under connections a routing looked
+popular for being *duplicated*: OOCL on Ho Chi Minh → Los Angeles had a Ningbo double-transship with
+8 connections across 2 dates against a direct with 3 across 3, so connections named the 2 TS chain
+as its main service on a row whose columns read 4 direct. Eight connections on two days are two
+options, so it cannot happen.
 
 **Sailing window** (first → last ETD) separates a service that is *small* from one that is *ending*.
 On Semarang → Savannah, EMC's four dates run Aug 30 – Sep 12 while HMM runs to Oct 23: fine for a
@@ -466,10 +512,11 @@ put it there is on that row.
 Two refinements the ordering needed, both from real lanes:
 
 - **Thin services drop behind substantial ones before speed is considered.** A fast median off three
-  departures is not the same claim as one off twenty; without this the smaller number simply wins.
+  options is not the same claim as one off twenty; without this the smaller number simply wins.
   Ordering on median alone put COS second on Semarang — 29 days across 3 sailings, ahead of HMM's 31
-  across 20. "Thin" is relative to the lane (a quarter of the best-served carrier's dates), because
-  a busy lane and a quiet one cannot share an absolute threshold.
+  across 20. "Thin" is relative to the lane (a quarter of the best-served carrier's options), because
+  a busy lane and a quiet one cannot share an absolute threshold. It counts **options** rather than
+  dates so the sample size matches the statistic it guards — the median is computed over options.
 - **But a thin service that is materially faster is not demoted.** The rule exists to stop three
   sailings outranking twenty on a two-day edge, not to bury a real advantage. EMC on Semarang →
   Savannah runs 4 dates at 44.5 against a 54.5-day lane — ten days, 18% — and sank to last behind
@@ -495,7 +542,10 @@ interrogate into an instruction they must trust.
 
 It exists because a lane with no direct service has to read as a **hard market** rather than as a
 broken screen — 10 of the 51 lanes in the current snapshot have none, and direct is only 19% of
-connections market-wide. Silence there looks like a bug and gets the whole view distrusted.
+options market-wide. Silence there looks like a bug and gets the whole view distrusted.
+
+The banner reads **"N% of options are direct"** rather than of dates: a day carrying a direct and
+two transships used to count wholly as direct, which overstated how easy the lane is.
 
 ---
 
@@ -1012,6 +1062,59 @@ inconsistent and neither will be trusted.
 **Why this order:** every number in this document was derived by SQL and can be re-derived in Node.
 If the aggregates are pure functions, their output can be checked against the tables above without
 opening a browser. Build the map first and the only way to test a count is to look at lines and hope.
+
+---
+
+# Known weaknesses of the option model
+
+The option is the right unit — it is what a forwarder quotes — but it is not a quality measure, and
+three things follow from that. All three are measured, none is fixed.
+
+## 1. The count rewards publishing breadth, and breadth is often junk
+
+An option costs a carrier nothing to publish. Measured, routings published per departure day:
+
+| Carrier / lane | Options | Dates | Ratio | Median |
+|---|---|---|---|---|
+| COS Pipavav → Chicago | 16 | 4 | **4.0×** | 64.5d |
+| CMA Pipavav → Pittsburgh | 20 | 5 | **4.0×** | 68.3d |
+| CMA Laem Chabang → Philadelphia | 79 | 22 | **3.6×** | 61d |
+| YML Hai Phong → Salt Lake City | 25 | 11 | 2.3× | 38d |
+
+**Every high-ratio cell is also a slow one.** CMA's 79 options on Laem Chabang → Philadelphia
+include 37 that route through **Melbourne, Brisbane and Tauranga** at 60–65 days — real
+round-the-world strings, commercially absurd for Thailand → US East Coast. The option count says
+CMA is the richest carrier on that lane. It is the worst.
+
+**What saves the reader is the SORT, not the count.** Ordering leads with direct options, then
+`avgTs`, so CMA (0 direct, 2.00 avg TS) lands last. Read the column alone and it misleads; read the
+row and it does not. **Never rank on options.**
+
+## 2. Spread inside an option is now invisible
+
+An option carries the median of its arrivals, and the `Spread` column measures variation *between*
+options. Variation *within* one is reported nowhere. **199 options carry arrivals that differ**, and
+the extremes are severe:
+
+```
+COS  | 2026-09-18 | Shanghai > New York     3 arrivals   43-69d   reported as 48
+OOCL | 2026-09-10 | Shanghai > Oakland      4 arrivals  81-102d   reported as 91.5
+COS  | 2026-09-20 | Hong Kong > New York    3 arrivals   37-61d   reported as 47
+```
+
+A reader books "48 days" and may get 69. The old connection model exposed this through the range;
+the option model trades it for a count that is not distorted by publishing volume. That is the right
+trade for *comparing carriers* and the wrong one for *booking a specific sailing* — which is the
+grid's job, and the grid still shows every connection.
+
+**Worth fixing** by carrying an option's own min/max and flagging a wide one, rather than by
+reverting to connection-weighted aggregates.
+
+## 3. An option is what is ADVERTISED, not what is obtainable
+
+The schedule is a carrier's published intent. Whether space exists on a given routing, and whether a
+forwarder will actually quote it, are outside this dataset entirely. The view measures **choice on
+paper**. Every number here is upstream of a phone call.
 
 ---
 
