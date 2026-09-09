@@ -86,7 +86,7 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   ];
   const cs = carrierStats(rows, LANE);
   check("shallower routing wins on equal directness", cs[0].carrier, "ONE_HOP");
-  check("avg TS is reported per connection", [cs[0].avgTs, cs[1].avgTs], [1, 2]);
+  check("avg TS is reported per OPTION", [cs[0].avgTs, cs[1].avgTs], [1, 2]);
 }
 
 // ── THE TIEBREAK IS VOLUME-WEIGHTED ──────────────────────────────────────────────────
@@ -106,7 +106,7 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   const thin = cs.find((c) => c.carrier === "THIN");
   const deep = cs.find((c) => c.carrier === "DEEP");
   check("the thin carrier really is faster on its main service", thin.mainRoute.median < deep.mainRoute.median, true);
-  check("...but has far fewer sailings behind it", thin.mainRoute.connections < deep.mainRoute.connections, true);
+  check("...but has far fewer sailings behind it", thin.mainRoute.options < deep.mainRoute.options, true);
   check("...and does not outrank the deep service", order(rows), ["DEEP", "THIN"]);
 }
 
@@ -150,17 +150,21 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   ];
   const c = carrierStats(rows, LANE)[0];
   check("main service is the most-run routing", c.mainRoute.label, "USUAL > POD");
-  check("...with its own count", c.mainRoute.connections, 9);
+  check("...with its own count, in options not connections", [c.mainRoute.options, c.mainRoute.dates], [9, 9]);
   check("...and its own median, not the best case", [c.mainRoute.median, c.transit.min], [30, 20]);
 }
 
-// ── MAIN SERVICE IS CHOSEN BY DATES, NOT CONNECTIONS ─────────────────────────────────
+// ── A DUPLICATED ROUTING IS NOT A FREQUENT ONE ───────────────────────────────────────
 //
-// A carrier can publish several onward vessels against one departure, so connection counts favour
-// routings that are DUPLICATED over routings that are FREQUENT. OOCL on Ho Chi Minh -> Los Angeles
-// showed it plainly: a Ningbo double-transship carried 8 connections across 2 dates while its
-// direct Long Beach service carried 3 across 3. Picking by connections named the 2 TS chain as the
-// main service of a carrier whose date columns read "4 direct" — a contradiction on a single row.
+// A carrier can publish several onward vessels against one departure. Counted as connections, that
+// made a routing look popular for being duplicated: OOCL on Ho Chi Minh -> Los Angeles carried a
+// Ningbo double-transship with 8 connections across 2 dates against a direct with 3 across 3, and
+// picking by connections named the 2 TS chain as the main service of a carrier whose columns read
+// "4 direct" — a contradiction on one row.
+//
+// COUNTING OPTIONS REMOVES THE TRAP RATHER THAN GUARDING AGAINST IT: eight connections on two days
+// are two options, so the duplicated routing cannot outrank the frequent one however many vessels
+// it is published against.
 {
   const rows = [
     // Duplicated: 2 departures, four onward vessels each.
@@ -169,10 +173,11 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
     ...svc("C", 3, 30, [], "POD", 9),
   ];
   const c = carrierStats(rows, LANE)[0];
-  check("main service is the routing with most DATES", c.mainRoute.label, "POD");
-  check("...even though another has more connections", c.mainRoute.connections < 8, true);
-  check("...and the badge counts dates", c.mainRoute.dates, 3);
-  check("...so it does not contradict the date columns", [c.directDates, c.mainRoute.ts], [3, 0]);
+  check("main service is the routing with most OPTIONS", c.mainRoute.label, "POD");
+  check("...the duplicated routing collapses to 2 options", c.mainRoute.options, 3);
+  check("...and the badge counts options", c.mainRoute.options, 3);
+  check("...so it does not contradict the option columns", [c.directOptions, c.mainRoute.ts], [3, 0]);
+  check("...and the columns still sum to options", c.directOptions + c.ts1Options + c.ts2Options, c.options);
 }
 
 // ── PORT COMPLEXES ARE ONE SERVICE ───────────────────────────────────────────────────
@@ -211,7 +216,7 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   const rows = [cy(day(1), "Long Beach, CA"), cy(day(3), "Los Angeles, CA"), cy(day(5), "Oakland, CA")];
   const ls = lanesIn(rows);
   check("both berths are one lane", ls.map((l) => l.lastCy).sort(), ["Los Angeles/Long Beach, CA", "Oakland, CA"]);
-  check("...carrying every departure", ls.find((l) => /Long Beach/.test(l.lastCy)).departures, 2);
+  check("...carrying every option", ls.find((l) => /Long Beach/.test(l.lastCy)).options, 2);
   check(
     "...and the lane collects rows published under either",
     carrierStats(rows, { pol: "POL", lastCy: "Los Angeles/Long Beach, CA" })[0].sailDates,
@@ -221,9 +226,12 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   check("an ordinary lane is unaffected", carrierStats(rows, { pol: "POL", lastCy: "Oakland, CA" })[0].sailDates, 1);
 }
 
-// ── DATES, NOT CONNECTIONS ───────────────────────────────────────────────────────────
-// Several onward vessels off one feeder are one chance to ship, not four. Measured on the real
-// lane, ONE published 78 connections against 9 departures inside a 12-day window.
+// ── PADDING CANNOT BUY RANK ──────────────────────────────────────────────────────────
+// Several onward vessels off one feeder are one thing a forwarder can quote, not four. Measured on
+// the real lane, ONE published 78 connections against 9 departures inside a 12-day window.
+//
+// Under connections the padded carrier led 15 to 8. Under options it does not lead at all — this
+// assertion is the inverse of the one it replaces, and that inversion is the point of the model.
 {
   const rows = [
     ...[1, 2, 3].flatMap((d) => [0, 1, 2, 3, 4].map((v) => conn("PADDED", day(d), 40, ["HUB"], "POD", `P${v}`))),
@@ -232,8 +240,9 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   const cs = carrierStats(rows, LANE);
   const padded = cs.find((c) => c.carrier === "PADDED");
   const real = cs.find((c) => c.carrier === "REAL");
-  check("connections favour the padded carrier", padded.departures > real.departures, true);
-  check("...but dates favour the real service", [real.sailDates, padded.sailDates], [8, 3]);
+  check("options do NOT favour the padded carrier", padded.options < real.options, true);
+  check("...15 connections are 3 options", [padded.options, padded.sailDates], [3, 3]);
+  check("...and dates agree with them", [real.options, real.sailDates], [8, 8]);
   check("...and the real service ranks first", order(rows)[0], "REAL");
 }
 
@@ -260,6 +269,71 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   check("null transit stays null", [unk.transit.median, unk.vsLaneMedian], [null, null]);
   check("...produces no NaN", Number.isNaN(unk.avgTs), false);
   check("...and sorts behind a measured carrier", order(rows), ["KNOWN", "UNKNOWN"]);
+}
+
+// ── WHAT AN OPTION IS ────────────────────────────────────────────────────────────────
+//
+// One routing, on one day, from one carrier — what a forwarder actually quotes. The two counts it
+// replaces distorted it in opposite directions, so both directions are asserted here.
+{
+  // Several onward vessels on one chain and one day are ONE option. Measured on the real market,
+  // ONE published `Singapore > Los Angeles/Long Beach` on 2026-09-10 as twenty-two connections.
+  const many = [0, 1, 2, 3, 4, 5].map((v) => conn("C", day(1), 30 + v, ["HUB"], "POD", `V${v}`));
+  const one = carrierStats(many, LANE)[0];
+  check("six onward vessels on one chain are one option", [one.options, one.sailDates], [1, 1]);
+  // 30..35 -> median 32.5. The option carries the median of its arrivals, not the best of them.
+  check("...carrying the median of its arrivals, not the best", one.transit.median, 32.5);
+
+  // Two routings on one day are TWO options, which is the case `dates` used to hide. Measured, 334
+  // of 1,707 (carrier, lane, date) cells carry more than one chain.
+  const both = [conn("C", day(1), 25, [], "POD"), conn("C", day(1), 31, ["TAIPEI"], "POD")];
+  const two = carrierStats(both, LANE)[0];
+  check("a direct and a transship on one day are two options", [two.options, two.sailDates], [2, 1]);
+  check("...split across the depth columns", [two.directOptions, two.ts1Options], [1, 1]);
+}
+
+// ── THE INVARIANT THE DELETED RULE USED TO HAND-MAINTAIN ─────────────────────────────
+//
+// Counting dates meant classifying each date by its shallowest routing so Direct + 1 TS + 2+ TS
+// would add up. An option has exactly one depth, so the columns sum BY CONSTRUCTION — and this
+// asserts it across a deliberately awkward mix rather than on one tidy carrier.
+{
+  const rows = [
+    // One carrier offering direct, 1 TS and 2 TS on the SAME day, plus duplicates of each.
+    ...[0, 1, 2].map((v) => conn("MIX", day(1), 25, [], "POD", `A${v}`)),
+    conn("MIX", day(1), 30, ["HUB"], "POD", "B0"),
+    ...[0, 1].map((v) => conn("MIX", day(1), 44, ["HUB", "HUB2"], "POD", `C${v}`)),
+    // ...and a second day carrying only a transship.
+    conn("MIX", day(4), 31, ["HUB"], "POD", "D0"),
+    ...svc("OTHER", 5, 28, [], "POD", 2),
+  ];
+  for (const c of carrierStats(rows, LANE)) {
+    check(
+      `${c.carrier}: direct + 1 TS + 2+ TS === options`,
+      c.directOptions + c.ts1Options + c.ts2Options,
+      c.options,
+    );
+  }
+  const mix = carrierStats(rows, LANE).find((c) => c.carrier === "MIX");
+  check("...six connections on one day are three options", [mix.options, mix.sailDates], [4, 2]);
+  check("...one per depth on the shared day, plus the second day's",
+    [mix.directOptions, mix.ts1Options, mix.ts2Options], [1, 2, 1]);
+}
+
+// ── CORRIDOR OPTIONS EXCEED CORRIDOR DATES WHEN CARRIERS SHARE A ROUTING ─────────────
+//
+// The chain is fixed within a corridor row, so it is tempting to think options and dates must
+// match there. They do not: a corridor spans carriers, and two of them sailing one routing on one
+// day are two things you can be quoted and one day you can leave.
+{
+  const rows = [
+    conn("A", day(1), 30, ["HUB"], "POD"),
+    conn("B", day(1), 32, ["HUB"], "POD"),
+    conn("A", day(6), 31, ["HUB"], "POD"),
+  ];
+  const [corr] = corridorStats(rows, LANE);
+  check("two carriers on one routing and one day", [corr.options, corr.sailDates], [3, 2]);
+  check("...and both are named on the row", corr.carriers, ["A", "B"]);
 }
 
 console.log(failed ? `\n${failed} failure(s)` : "\nall checks passed");

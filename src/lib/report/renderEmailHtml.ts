@@ -60,7 +60,7 @@ function row(r: BoardRow, showPol: boolean): string {
     (showPol ? td(esc(r.pol)) : "") +
     td(esc(r.destination)) +
     td(String(r.carriers), true) +
-    td(String(r.sailDates), true) +
+    td(String(r.options), true) +
     // Zero carriers with direct is the interesting case, so it is stated rather than left blank.
     td(
       r.carriersWithDirect === 0
@@ -80,7 +80,7 @@ const headerRow = (showPol: boolean) =>
   (showPol ? th("Load port") : "") +
   th("Destination") +
   th("Carriers", true) +
-  th("Sail dates", true) +
+  th("Options", true) +
   th("With direct", true) +
   th("Best (median)", true) +
   th("Lane median", true) +
@@ -138,8 +138,9 @@ export function renderEmailHtml(r: WeeklyReport): string {
   parts.push(
     `<div style="margin-top:22px;padding:10px 12px;background:${PANEL};font-size:12px;color:${MUTED};line-height:1.5;">`,
     `<strong style="color:${INK};">Reading this</strong><br>` +
-      `<strong>Sail dates</strong> counts distinct departures, not schedule rows — several onward ` +
-      `vessels off one feeder are one chance to ship.<br>` +
+      `<strong>Options</strong> counts what a forwarder can be asked to quote: one routing, on one ` +
+      `day. Several onward vessels off the same feeder are one option, not four; a direct and a ` +
+      `transship leaving the same day are two.<br>` +
       `<strong>Best (median)</strong> is the fastest carrier by median transit, not by its quickest ` +
       `single sailing.<br>` +
       `<strong>Edge</strong> is the lane median minus that best carrier: what picking the right ` +
@@ -177,7 +178,7 @@ export function renderEmailText(r: WeeklyReport): string {
     lines.push(g.pol.toUpperCase());
     for (const b of g.rows) {
       lines.push(
-        `  ${b.destination}: ${b.carriers} carriers, ${b.sailDates} dates, ` +
+        `  ${b.destination}: ${b.carriers} carriers, ${b.options} options, ` +
           `best ${num(b.best?.median)} (${b.best?.carrier ?? "—"}), lane ${num(b.laneMedian)}` +
           (b.edge && b.edge > 0 ? `, edge ${b.edge}d` : ""),
       );

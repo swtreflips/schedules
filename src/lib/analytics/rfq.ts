@@ -32,10 +32,12 @@ export function laneVerdict(lane: Lane, carriers: CarrierRow[]): Verdict {
     };
   }
 
-  const withDirect = carriers.filter((c) => c.directDates > 0);
-  const directDates = carriers.reduce((n, c) => n + c.directDates, 0);
-  const allDates = carriers.reduce((n, c) => n + c.sailDates, 0);
-  const pctDirect = allDates ? Math.round((directDates / allDates) * 100) : 0;
+  // OVER OPTIONS, NOT DATES. "What share of what I could ask for is direct" is the claim worth
+  // making; a date carrying a direct and two transships used to count wholly as direct.
+  const withDirect = carriers.filter((c) => c.directOptions > 0);
+  const directOptions = carriers.reduce((n, c) => n + c.directOptions, 0);
+  const allOptions = carriers.reduce((n, c) => n + c.options, 0);
+  const pctDirect = allOptions ? Math.round((directOptions / allOptions) * 100) : 0;
 
   const fastest = [...carriers]
     .filter((c) => c.transit.median != null)
@@ -54,13 +56,13 @@ export function laneVerdict(lane: Lane, carriers: CarrierRow[]): Verdict {
   if (pctDirect >= 50) {
     return {
       tone: "healthy",
-      headline: `${pctDirect}% of sailing dates are direct`,
+      headline: `${pctDirect}% of options are direct`,
       detail: `${withDirect.length} of ${carriers.length} carriers run direct. ${best}`,
     };
   }
   return {
     tone: "mixed",
-    headline: `Mixed — ${pctDirect}% of sailing dates are direct`,
+    headline: `Mixed — ${pctDirect}% of options are direct`,
     detail: `Only ${withDirect.length} of ${carriers.length} carriers run direct. ${best}`,
   };
 }

@@ -16,7 +16,8 @@ export interface BoardRow {
   pol: string;
   destination: string;
   carriers: number;
-  sailDates: number;
+  /** Quotable options on the lane: one chain, one day, one carrier. */
+  options: number;
   /** How many carriers offer at least one direct sailing. Zero is a meaningful answer. */
   carriersWithDirect: number;
   best: { carrier: string; median: number } | null;
@@ -87,8 +88,8 @@ export function buildWeeklyReport(
       pol: lane.pol,
       destination: lane.lastCy,
       carriers: cs.length,
-      sailDates: cs.reduce((n, c) => n + c.sailDates, 0),
-      carriersWithDirect: cs.filter((c) => c.directDates > 0).length,
+      options: cs.reduce((n, c) => n + c.options, 0),
+      carriersWithDirect: cs.filter((c) => c.directOptions > 0).length,
       best,
       laneMedian,
       edge:
@@ -113,7 +114,7 @@ export function buildWeeklyReport(
   const byPol = [...byPolMap.entries()]
     .map(([pol, rs]) => ({
       pol,
-      rows: rs.sort((a, b) => b.sailDates - a.sailDates || a.destination.localeCompare(b.destination)),
+      rows: rs.sort((a, b) => b.options - a.options || a.destination.localeCompare(b.destination)),
     }))
     .sort((a, b) => a.pol.localeCompare(b.pol));
 
@@ -129,7 +130,7 @@ export function buildWeeklyReport(
     coverage: {
       carriers: new Set(rows.map((r) => r.carrier_code)).size,
       lanes: board.length,
-      sailings: lanes.reduce((n, l) => n + l.departures, 0),
+      sailings: lanes.reduce((n, l) => n + l.options, 0),
       pols: new Set(board.map((b) => b.pol)).size,
     },
     attention,

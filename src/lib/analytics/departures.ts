@@ -1,4 +1,5 @@
 import type { Schedule } from "../../types/schedule";
+import { routeLabel } from "./ports";
 
 /**
  * The unit of analysis is a CONNECTION: one bookable way to move the box from POL to Last CY.
@@ -122,3 +123,87 @@ export function averageGapDays(etds: Array<string | null>): number | null {
 
 /** Transshipment count. `ts_ports` is the source of truth — never branch on `transport_type`. */
 export const tsCount = (s: Schedule): number => (s.ts_ports ?? []).length;
+
+/**
+ * THE UNIT OF ANALYSIS: ONE OPTION — one chain, on one day, from one carrier.
+ *
+ * This is what a forwarder actually quotes. "Direct to Norfolk on the 10th" and "via Taipei on the
+ * 10th" are two things you can ask for: one may come back and the other not, and if both do you
+ * take the direct. Neither existing count says that, and both distort it in opposite directions.
+ *
+ * CONNECTIONS OVER-COUNT, by up to 22x. ONE publishes `Singapore > Los Angeles/Long Beach` on
+ * 2026-09-10 as twenty-two connections — twenty-two onward vessels on one chain on one day. One
+ * quotable thing, counted twenty-two times. Measured: 583 of 1,773 options are inflated this way.
+ *
+ * DATES UNDER-COUNT, on a fifth of the data. 334 of 1,707 (carrier, lane, date) cells carry more
+ * than one chain. ONE out of Pipavav to Chicago on 2026-09-10 reads as ONE date and is EIGHT
+ * options — direct to LA, direct to Oakland, and six Singapore transships to LA, New York, Oakland,
+ * Tacoma, Norfolk and Halifax. Those are six different answers to "can you do it", collapsed to one.
+ *
+ * Market-wide: 2,909 connections, 1,773 options.
+ *
+ * BOTH COUNTS STILL EXIST ON A ROW, because they answer different questions — options are what you
+ * can ask for, dates are when you can actually leave. A carrier with twenty options across three
+ * days is not the same proposition as twenty across twenty.
+ */
+export interface Option {
+  carrier: string;
+  /** ETD day, `YYYY-MM-DD`. Options are per DAY: a time of day is not a separate opportunity. */
+  date: string;
+  /** `routeLabel` — the transshipment path then the discharge port, port complexes folded. */
+  chain: string;
+  pod: string;
+  ts: number;
+  /**
+   * Median of this option's published arrivals, or null when none carry a transit.
+   *
+   * THE MEDIAN, NOT THE BEST. An option published against several onward vessels has several
+   * arrival dates — 32, 33, 37 and 38 days on one real ONE sailing — and taking the fastest would
+   * headline something that happened once. This is the same reasoning `mainRoute` already applies
+   * to routings, applied to the number itself.
+   *
+   * It also removes a weighting fault: aggregating transit over connections let a chain published
+   * twenty-two times pull a carrier's median twenty-two times, which is exactly what makes
+   * connections a bad count in the first place.
+   */
+  transit: number | null;
+  /** How many connections were published for it. A tooltip, never a headline. */
+  connections: number;
+}
+
+/**
+ * Connections folded into options.
+ *
+ * One level coarser than `dedupeConnections`: same rows, grouped without `eta` and
+ * `vessel_sequence`, with `etd` truncated to a day.
+ */
+export function toOptions(rows: Schedule[]): Option[] {
+  const groups = new Map<string, Schedule[]>();
+  for (const c of dedupeConnections(rows)) {
+    const date = (c.etd ?? "").slice(0, 10);
+    if (!date) continue; // an unscheduled sailing is not something anyone can be quoted
+    // U+0000 cannot occur in a carrier code, a date or a port name, so parts cannot collide.
+    const key = [c.carrier_code, date, routeLabel(c)].join("\u0000");
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(c);
+    else groups.set(key, [c]);
+  }
+
+  const out: Option[] = [];
+  for (const group of groups.values()) {
+    const first = group[0];
+    out.push({
+      carrier: first.carrier_code,
+      date: (first.etd ?? "").slice(0, 10),
+      chain: routeLabel(first),
+      pod: first.port_of_discharge,
+      // SHALLOWEST, NOT THE FIRST ROW'S. Folding a port complex can put a direct and a feeder to
+      // the other berth under one label, and what the routing is worth is the shallower of them.
+      // Same rule `mainRoute` applies for the same reason.
+      ts: Math.min(...group.map(tsCount)),
+      transit: spreadOf(group.map((g) => g.transit_time_days)).median,
+      connections: group.length,
+    });
+  }
+  return out;
+}

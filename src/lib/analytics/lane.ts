@@ -1,9 +1,8 @@
 import type { Schedule } from "../../types/schedule";
-import { compareDateAsc } from "../compare";
 import {
-  dedupeConnections,
   spreadOf,
-  tsCount,
+  toOptions,
+  type Option,
   type Spread,
 } from "./departures";
 import { canonicalPort, routeLabel, samePlace } from "./ports";
@@ -48,8 +47,14 @@ export interface CorridorRow {
   ts: number;
   /** True when the box moves inland from POD by rail — discharge and Last CY are different places. */
   hasRailLeg: boolean;
-  departures: number;
-  /** Distinct ETD dates. Chances to ship, as opposed to onward-vessel permutations. */
+  /** Quotable options on this routing. See `Option`. */
+  options: number;
+  /**
+   * Distinct ETD dates.
+   *
+   * NOT THE SAME AS `options`, EVEN THOUGH THE CHAIN IS FIXED HERE. A corridor spans carriers, so
+   * two carriers sailing this routing on one day are two options and one date.
+   */
   sailDates: number;
   carriers: string[];
   transit: Spread;
@@ -74,38 +79,48 @@ export interface CorridorRow {
  * there — a Gulf discharge with a long rail leg against a West Coast one.
  */
 export function corridorStats(rows: Schedule[], lane?: Lane): CorridorRow[] {
-  const conns = dedupeConnections(inLane(rows, lane));
-  const groups = new Map<string, Schedule[]>();
+  const scoped = inLane(rows, lane);
+  const groups = new Map<string, Option[]>();
 
-  for (const c of conns) {
-    const key = routeLabel(c);
-    const bucket = groups.get(key);
-    if (bucket) bucket.push(c);
-    else groups.set(key, [c]);
+  for (const o of toOptions(scoped)) {
+    const bucket = groups.get(o.chain);
+    if (bucket) bucket.push(o);
+    else groups.set(o.chain, [o]);
+  }
+
+  // The rail flag reads the raw rows, because an Option carries the routing rather than the Last CY
+  // it was found under. Keyed on the chain, which is what an option carries.
+  const railByChain = new Map<string, boolean>();
+  const viaByChain = new Map<string, string[]>();
+  for (const r of scoped) {
+    const chain = optionChain(r);
+    if (!railByChain.has(chain)) {
+      // Same complex is not a rail leg: a Long Beach discharge against a Los Angeles Last CY moves
+      // by truck across one harbour, not by train across the country.
+      railByChain.set(chain, !samePlace(r.port_of_discharge, r.last_cy));
+      viaByChain.set(chain, (r.ts_ports ?? []).map(canonicalPort));
+    }
   }
 
   const out: CorridorRow[] = [];
   for (const [key, group] of groups) {
-    const first = group[0];
     out.push({
       key,
-      via: (first.ts_ports ?? []).map(canonicalPort),
-      pod: canonicalPort(first.port_of_discharge),
-      ts: tsCount(first),
-      // Same complex is not a rail leg: a Long Beach discharge against a Los Angeles Last CY moves
-      // by truck across one harbour, not by train across the country.
-      hasRailLeg: !samePlace(first.port_of_discharge, first.last_cy),
-      departures: group.length,
-      sailDates: distinctDates(group).length,
-      carriers: [...new Set(group.map((g) => g.carrier_code))].sort(),
-      transit: spreadOf(group.map((g) => g.transit_time_days)),
-      nextEtd: earliestEtd(group),
+      via: viaByChain.get(key) ?? [],
+      pod: canonicalPort(group[0].pod),
+      ts: Math.min(...group.map((o) => o.ts)),
+      hasRailLeg: railByChain.get(key) ?? false,
+      options: group.length,
+      sailDates: new Set(group.map((o) => o.date)).size,
+      carriers: [...new Set(group.map((o) => o.carrier))].sort(),
+      transit: spreadOf(group.map((o) => o.transit)),
+      nextEtd: group.map((o) => o.date).sort()[0] ?? null,
     });
   }
 
   return out.sort(
     (a, b) =>
-      b.departures - a.departures ||
+      b.options - a.options ||
       (a.transit.median ?? Infinity) - (b.transit.median ?? Infinity),
   );
 }
@@ -114,34 +129,44 @@ export function corridorStats(rows: Schedule[], lane?: Lane): CorridorRow[] {
 
 export interface CarrierRow {
   carrier: string;
-  /** Connections — onward-vessel permutations. Kept, but NOT the headline. See `sailDates`. */
-  departures: number;
   /**
-   * Distinct ETD dates: the number of times a box can actually be shipped.
+   * Quotable options — one chain, one day. THE HEADLINE. See `Option` in departures.ts.
+   */
+  options: number;
+  /**
+   * Distinct ETD dates: the number of days a box can actually leave on.
    *
-   * THIS IS THE UNIT OF OPPORTUNITY, not `departures`. On Semarang -> Los Angeles, ONE shows 78
-   * connections against HMM's 42 — but ONE's are 9 departures inside a 12-day window, while HMM's
-   * are 18 dates across 40 days. Ranked on connections ONE leads by 2x; on the chance of getting a
-   * box away it is clearly third.
+   * KEPT ALONGSIDE `options` BECAUSE THEY ANSWER DIFFERENT QUESTIONS. Options are what you can ask
+   * a forwarder for; dates are when you can go. Twenty options across three days is not the same
+   * proposition as twenty across twenty, and only the pair shows that.
    */
   sailDates: number;
-  directDates: number;
-  ts1Dates: number;
-  ts2Dates: number;
+  /**
+   * Options by routing depth.
+   *
+   * THESE SUM TO `options`, BY CONSTRUCTION rather than by rule. Counting dates required
+   * classifying each date by its shallowest routing so the columns would add up — a carrier
+   * offering a 1 TS and a 2 TS on one departure had to be counted once, as the 1 TS. An option
+   * has exactly one depth, so there is nothing to collapse and nothing to explain.
+   */
+  directOptions: number;
+  ts1Options: number;
+  ts2Options: number;
   /** Days between first and last sailing. A high count inside a short window is not coverage. */
   windowDays: number;
-  direct: number;
-  ts1: number;
-  ts2plus: number;
   corridors: number;
   transit: Spread;
   pods: string[];
   nextEtd: string | null;
   /**
-   * Mean transshipments per connection. The single clearest quality signal on a lane: it separates
-   * a carrier that always runs one hand-off from one that routinely runs two, and it tracks
-   * transit directly — measured on Semarang -> Los Angeles, 1.00 for WHL at a 25.5-day median
-   * against 2.00 for HPL at 42.0.
+   * Mean transshipments per OPTION. The single clearest quality signal on a lane: it separates a
+   * carrier that always runs one hand-off from one that routinely runs two, and it tracks transit
+   * directly — measured on Semarang -> Los Angeles, 1.00 for WHL at a 25.5-day median against 2.00
+   * for HPL at 42.0.
+   *
+   * PER OPTION, NOT PER CONNECTION, which it used to be. Connection-weighting let a chain published
+   * against twenty-two onward vessels count twenty-two times toward a carrier's routing depth — the
+   * same distortion that makes connections a bad count anywhere else.
    */
   avgTs: number;
   /**
@@ -152,7 +177,7 @@ export interface CarrierRow {
    * Taipei, 8 sailings — runs a 20.5-day median. Booking against the 15 would be booking against
    * something that happened once.
    */
-  mainRoute: { label: string; dates: number; connections: number; ts: number; median: number | null } | null;
+  mainRoute: { label: string; options: number; dates: number; ts: number; median: number | null } | null;
   /**
    * Last published sailing, beside the next one.
    *
@@ -170,7 +195,7 @@ export interface CarrierRow {
    * `schedules_latest` keeps only the newest snapshot per (carrier, POL, last_cy), and WHL's
    * published routing alternates between snapshots — Jul 29, Aug 7 and Aug 17 entirely direct;
    * Aug 12 and Aug 31 entirely transshipped. So the latest snapshot reports zero direct for a
-   * carrier with 35 direct departures in history. Render as "none in this snapshot", never as 0.
+   * carrier with 35 direct options in history. Render as "none in this snapshot", never as 0.
    */
   directUnknown: boolean;
 }
@@ -179,115 +204,85 @@ export interface CarrierRow {
  * Per-carrier summary for a lane.
  *
  * The question is not "who is fastest" but "whose space can a forwarder actually get, at a transit
- * we can live with" — so the table leads with how many DIRECT sailing dates a carrier offers, then
- * how deep its transshipments run, then the transit its main service actually delivers.
+ * we can live with" — so the table leads with how many DIRECT options a carrier offers, then how
+ * deep its transshipments run, then the transit its main service actually delivers.
  *
- * THE SORT IS THE ARGUMENT. Ordered by direct dates, then fewest transshipments, then the median
+ * THE SORT IS THE ARGUMENT. Ordered by direct options, then fewest transshipments, then the median
  * of the routing each carrier runs most. No score and no label: the carrier worth calling is the
  * one at the top, and every column that put it there is on the row.
  */
 export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
-  const conns = dedupeConnections(inLane(rows, lane));
-  const groups = new Map<string, Schedule[]>();
+  const groups = new Map<string, Option[]>();
 
-  for (const c of conns) {
-    const bucket = groups.get(c.carrier_code);
-    if (bucket) bucket.push(c);
-    else groups.set(c.carrier_code, [c]);
+  for (const o of toOptions(inLane(rows, lane))) {
+    const bucket = groups.get(o.carrier);
+    if (bucket) bucket.push(o);
+    else groups.set(o.carrier, [o]);
   }
 
   type Draft = Omit<CarrierRow, "vsLaneMedian">;
   const drafts: Draft[] = [];
 
   for (const [carrier, group] of groups) {
-    const direct = group.filter((g) => tsCount(g) === 0);
-    const ts1 = group.filter((g) => tsCount(g) === 1);
-    const ts2 = group.filter((g) => tsCount(g) >= 2);
-    const dates = distinctDates(group);
-
-    // EACH DATE IS COUNTED ONCE, BY THE BEST ROUTING AVAILABLE THAT DAY.
-    //
-    // A carrier often publishes several routings for the same departure. HPL on Semarang ->
-    // Savannah sails 7 dates and offers BOTH a 1 TS and a 2 TS option on three of them. Counting
-    // dates per routing type made those columns overlap — 7 with a 1 TS, 3 with a 2 TS, against 7
-    // dates in total — so they read as a breakdown, invited addition, and did not add up.
-    //
-    // Classifying each date by its SHALLOWEST option fixes that and is the operationally true
-    // reading: given a direct and a 2 TS on the same day you would book the direct, so that is
-    // what the day is worth. direct + ts1 + ts2 now equals dates, always.
-    //
-    // Routing depth is not lost — `avgTs` still measures it across every connection, which is
-    // where the 2 TS options a carrier also runs show up.
-    const bestByDate = new Map<string, number>();
-    for (const g of group) {
-      const d = g.etd?.slice(0, 10);
-      if (!d) continue;
-      const depth = tsCount(g);
-      const seen = bestByDate.get(d);
-      if (seen === undefined || depth < seen) bestByDate.set(d, depth);
-    }
-    const depths = [...bestByDate.values()];
-    const directDates = depths.filter((t) => t === 0).length;
-    const ts1Dates = depths.filter((t) => t === 1).length;
-    const ts2Dates = depths.filter((t) => t >= 2).length;
+    // NOTHING TO COLLAPSE. An option has exactly one routing depth, so these three sum to
+    // `group.length` by construction. The previous version counted DATES and had to classify each
+    // date by its shallowest routing to stop the columns overlapping — a carrier offering a 1 TS
+    // and a 2 TS on one departure was counted once, as the 1 TS, or the breakdown did not add up.
+    const directOptions = group.filter((o) => o.ts === 0).length;
+    const ts1Options = group.filter((o) => o.ts === 1).length;
+    const ts2Options = group.filter((o) => o.ts >= 2).length;
+    const dates = [...new Set(group.map((o) => o.date))].sort();
 
     // The routing this carrier runs most, and what THAT delivers — the transit actually on offer
     // rather than its luckiest sailing.
     //
-    // CHOSEN BY DATES, NOT CONNECTIONS. Picking by connection count selected routings that are
-    // merely duplicated rather than frequent, because a carrier can publish several onward vessels
-    // against one departure. OOCL on Ho Chi Minh -> Los Angeles made the point: a Ningbo double-
-    // transship had 8 connections across just 2 dates, while its direct Long Beach service had 3
-    // connections across 3 dates. Connections named the 2 TS chain as OOCL's main service on a
-    // carrier whose date columns read 4 direct — a flat contradiction on one row, and the very
-    // trap the rest of the table counts dates to avoid.
+    // BY OPTIONS, WHICH NEEDS NO ARGUMENT NOW. Picking by connection count used to select routings
+    // that were merely duplicated rather than frequent: OOCL on Ho Chi Minh -> Los Angeles had a
+    // Ningbo double-transship with 8 connections across just 2 dates against a direct with 3 across
+    // 3, so connections named the 2 TS chain as its main service on a row whose columns read 4
+    // direct. Options cannot do that — a chain published against twenty onward vessels on one day
+    // is one option, the same as a chain published against one.
     //
     // Ties break toward the shallower routing, then the faster median: offered equally often, a
     // direct is the truer description of a carrier than a transship.
-    const byRoute = new Map<string, Schedule[]>();
-    for (const g of group) {
-      const label = routeLabel(g);
-      const b = byRoute.get(label);
-      if (b) b.push(g);
-      else byRoute.set(label, [g]);
+    const byRoute = new Map<string, Option[]>();
+    for (const o of group) {
+      const b = byRoute.get(o.chain);
+      if (b) b.push(o);
+      else byRoute.set(o.chain, [o]);
     }
     const mainRoute =
       [...byRoute.entries()]
-        .map(([label, rows2]) => ({
+        .map(([label, os]) => ({
           label,
-          dates: distinctDates(rows2).length,
-          connections: rows2.length,
-          // Shallowest, not first: folding a port complex can put a direct and a feeder-to-the-
-          // other-berth under one label, and the shallower is what the routing is worth.
-          ts: Math.min(...rows2.map(tsCount)),
-          median: spreadOf(rows2.map((r) => r.transit_time_days)).median,
+          options: os.length,
+          dates: new Set(os.map((o) => o.date)).size,
+          ts: Math.min(...os.map((o) => o.ts)),
+          median: spreadOf(os.map((o) => o.transit)).median,
         }))
         .sort(
           (a, b) =>
-            b.dates - a.dates ||
+            b.options - a.options ||
             a.ts - b.ts ||
             (a.median ?? Infinity) - (b.median ?? Infinity),
         )[0] ?? null;
 
     drafts.push({
       carrier,
-      departures: group.length,
+      options: group.length,
       sailDates: dates.length,
-      directDates,
-      ts1Dates,
-      ts2Dates,
+      directOptions,
+      ts1Options,
+      ts2Options,
       windowDays: dates.length > 1 ? daysBetween(dates[0], dates[dates.length - 1]) : 0,
-      direct: direct.length,
-      ts1: ts1.length,
-      ts2plus: ts2.length,
-      corridors: new Set(group.map(routeLabel)).size,
-      transit: spreadOf(group.map((g) => g.transit_time_days)),
-      pods: [...new Set(group.map((g) => g.port_of_discharge))].sort(),
+      corridors: byRoute.size,
+      transit: spreadOf(group.map((o) => o.transit)),
+      pods: [...new Set(group.map((o) => o.pod))].sort(),
       nextEtd: dates[0] ?? null,
       lastEtd: dates[dates.length - 1] ?? null,
-      avgTs: Math.round((group.reduce((n, g) => n + tsCount(g), 0) / group.length) * 100) / 100,
+      avgTs: Math.round((group.reduce((n, o) => n + o.ts, 0) / group.length) * 100) / 100,
       mainRoute,
-      directUnknown: direct.length === 0,
+      directUnknown: directOptions === 0,
     });
   }
 
@@ -335,13 +330,15 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
   // The margin is relative, not absolute: 10% of the lane median. It clears EMC's 18% while still
   // catching the case the rule was built for — 29 days against a 30-day lane is 3%, and stays
   // demoted.
-  const mostDates = Math.max(0, ...drafts.map((d) => d.sailDates));
+  // SAMPLE SIZE IS MEASURED IN OPTIONS, because options are what the median is now computed over
+  // — the guard and the statistic it guards have to count the same thing.
+  const mostOptions = Math.max(0, ...drafts.map((d) => d.options));
   const MATERIAL_GAIN = 0.1;
   const materiallyFaster = (d: Draft) => {
     const v = vsLane(d);
     return v != null && laneMedian != null && laneMedian > 0 && -v / laneMedian >= MATERIAL_GAIN;
   };
-  const thin = (d: Draft) => d.sailDates < mostDates * 0.25 && !materiallyFaster(d);
+  const thin = (d: Draft) => d.options < mostOptions * 0.25 && !materiallyFaster(d);
 
   // Only then speed, and by the carrier's OVERALL median rather than its main service — the
   // overall figure covers everything it runs, where a main-service median can rest on a handful.
@@ -353,11 +350,11 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
     .map((d): CarrierRow => ({ ...d, vsLaneMedian: vsLane(d) }))
     .sort(
       (a, b) =>
-        b.directDates - a.directDates ||
+        b.directOptions - a.directOptions ||
         a.avgTs - b.avgTs ||
         Number(thin(a)) - Number(thin(b)) ||
         (a.transit.median ?? Infinity) - (b.transit.median ?? Infinity) ||
-        b.sailDates - a.sailDates ||
+        b.options - a.options ||
         a.carrier.localeCompare(b.carrier),
     );
 }
@@ -369,31 +366,36 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
  *
  * PORT COMPLEXES ARE ONE DESTINATION HERE TOO. Carriers publish Last CY as either `Los Angeles, CA`
  * or `Long Beach, CA` for what is commercially the same delivery, and keying on the raw value split
- * seven load ports into two lanes apiece — Ho Chi Minh -> Long Beach carried 69 departures that
+ * seven load ports into two lanes apiece — Ho Chi Minh -> Long Beach carried 69 options that
  * never appeared in the Ho Chi Minh -> Los Angeles table. Half a market missing from a comparison
  * is worse than an extra entry in a lane picker, so the complex folds at lane level as well.
  */
-export function lanesIn(rows: Schedule[]): Array<Lane & { departures: number }> {
+export function lanesIn(rows: Schedule[]): Array<Lane & { options: number }> {
   const groups = new Map<string, Schedule[]>();
-  for (const c of dedupeConnections(rows)) {
+  for (const c of rows) {
     const key = `${canonicalPort(c.port_of_loading)}\u0000${canonicalPort(c.last_cy)}`;
     const bucket = groups.get(key);
     if (bucket) bucket.push(c);
     else groups.set(key, [c]);
   }
+  // COUNTED PER LANE, not once globally. An option is scoped to the move it serves: one chain
+  // sailed toward two different inland ramps is two things a forwarder can be asked about.
   return [...groups.values()]
     .map((group) => ({
       pol: canonicalPort(group[0].port_of_loading),
       lastCy: canonicalPort(group[0].last_cy),
-      departures: group.length,
+      options: toOptions(group).length,
     }))
     .sort(
       (a, b) =>
-        b.departures - a.departures ||
+        b.options - a.options ||
         a.pol.localeCompare(b.pol) ||
         a.lastCy.localeCompare(b.lastCy),
     );
 }
+
+/** The chain a raw row belongs to — the same string `toOptions` puts on an `Option`. */
+const optionChain = (r: Schedule): string => routeLabel(r);
 
 // Matched on the port complex, not the string, so a lane named for a complex collects the rows each
 // carrier published under either berth. `canonicalPort` is idempotent — the complex name maps to
@@ -405,13 +407,10 @@ const inLane = (rows: Schedule[], lane?: Lane) =>
       )
     : rows;
 
-/** Sorted distinct ETD days. Null ETDs are dropped — an unscheduled sailing is not a chance. */
-const distinctDates = (group: Schedule[]): string[] =>
-  [...new Set(group.map((g) => g.etd).filter((e): e is string => !!e).map((e) => e.slice(0, 10)))].sort();
-
 const daysBetween = (a: string, b: string) =>
   Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86_400_000);
 
-// Nulls last, via the shared comparator — sorting ETDs directly is what shipped a crash once.
-const earliestEtd = (group: Schedule[]): string | null =>
-  group.map((g) => g.etd).sort(compareDateAsc)[0] ?? null;
+// `distinctDates` and `earliestEtd` are gone with the connection model. An Option already carries a
+// non-null `date` — toOptions drops rows without one, since an unscheduled sailing is not something
+// anyone can be quoted — so both collapse to a Set and a sort at the call site, and the null-safe
+// ETD comparator they needed has nothing left to guard.

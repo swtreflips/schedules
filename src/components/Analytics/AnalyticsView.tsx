@@ -81,7 +81,7 @@ export function AnalyticsView() {
           <select value={`${lane.pol} → ${lane.lastCy}`} onChange={(e) => setLaneKey(e.target.value)}>
             {lanes.map((l) => (
               <option key={`${l.pol} → ${l.lastCy}`} value={`${l.pol} → ${l.lastCy}`}>
-                {l.pol} → {l.lastCy} ({l.departures})
+                {l.pol} → {l.lastCy} ({l.options})
               </option>
             ))}
           </select>
@@ -109,11 +109,12 @@ export function AnalyticsView() {
             <thead>
               <tr>
                 <th>Carrier</th>
-                <th className="an-num" title="Sailing dates whose best option is direct">Direct</th>
-                <th className="an-num" title="Sailing dates whose best option is one transshipment">1 TS</th>
-                <th className="an-num" title="Sailing dates whose best option is two or more transshipments">2+ TS</th>
-                <th className="an-num" title="Distinct departure dates. Direct + 1 TS + 2+ TS add up to this: each date is counted once, under its best routing.">Dates</th>
-                <th className="an-num" title="Mean transshipments per sailing. Lower is a shorter, less fragile route.">Avg TS</th>
+                <th className="an-num" title="Direct options">Direct</th>
+                <th className="an-num" title="Options with one transshipment">1 TS</th>
+                <th className="an-num" title="Options with two or more transshipments">2+ TS</th>
+                <th className="an-num" title="Quotable options: one routing, on one day. Direct + 1 TS + 2+ TS always add up to this, because an option has exactly one routing depth.">Options</th>
+                <th className="an-num" title="Days a box can actually leave on. Fewer than Options means several routings share a departure day.">Dates</th>
+                <th className="an-num" title="Mean transshipments per option. Lower is a shorter, less fragile route.">Avg TS</th>
                 <th title="The routing this carrier runs on the most dates, and what that routing delivers">Main service</th>
                 <th className="an-num" title="Median transit of that main service — what is on offer repeatedly, not the best case">Its transit</th>
                 <th className="an-num">All sailings — median / range</th>
@@ -139,19 +140,22 @@ export function AnalyticsView() {
                         none
                       </span>
                     ) : (
-                      c.directDates
+                      c.directOptions
                     )}
                   </td>
-                  <td className="an-num">{c.ts1Dates || "—"}</td>
-                  <td className="an-num">{c.ts2Dates || "—"}</td>
-                  <td className="an-num an-strong">{c.sailDates}</td>
+                  <td className="an-num">{c.ts1Options || "—"}</td>
+                  <td className="an-num">{c.ts2Options || "—"}</td>
+                  <td className="an-num an-strong">{c.options}</td>
+                  {/* Dimmer than Options: the secondary of the pair. Equal numbers mean one routing
+                      per departure; fewer dates means a day carries several routings. */}
+                  <td className="an-num an-dim">{c.sailDates}</td>
                   <td className="an-num an-strong">{c.avgTs.toFixed(2)}</td>
                   <td className="an-route">
                     {c.mainRoute ? (
                       <>
                         {c.mainRoute.label}
-                        <span className="an-dim" title={`${c.mainRoute.dates} sailing dates on this routing, published as ${c.mainRoute.connections} bookable connections`}>
-                          {" "}×{c.mainRoute.dates}
+                        <span className="an-dim" title={`${c.mainRoute.options} options on this routing, across ${c.mainRoute.dates} sailing dates`}>
+                          {" "}×{c.mainRoute.options}
                         </span>
                       </>
                     ) : (
@@ -180,19 +184,24 @@ export function AnalyticsView() {
             </tbody>
           </table>
           <p className="an-foot">
-            <strong>Its transit</strong> is the median of the service each carrier runs most, not
-            its fastest sailing — a one-off quick crossing is not what gets booked repeatedly.
-            <strong> Direct / 1 TS / 2+ TS</strong> count sailing DATES, each under its best
-            routing that day, so the three add up to <strong>Dates</strong> — a carrier offering a
-            1 TS and a 2 TS on one departure is counted once, as the 1 TS. <strong>Avg TS</strong>
-            is where the deeper routings it also runs still show.
+            An <strong>option</strong> is one routing on one day — what a forwarder actually quotes.
+            A direct and a Taipei transship leaving the same day are two options: one may come back
+            and the other not, and if both do you take the direct. Several onward vessels on the
+            same routing are <em>one</em> option, not four.
+            <strong> Options vs Dates</strong> — options are what you can ask for, dates are when
+            you can leave. Equal numbers mean one routing per departure; fewer dates means a day
+            carries several.
+            <strong> Direct / 1 TS / 2+ TS</strong> always add up to <strong>Options</strong>,
+            because an option has exactly one routing depth.
+            <strong> Its transit</strong> is the median of the service each carrier runs most, not
+            its fastest sailing — a one-off quick crossing is not what gets booked repeatedly, and
+            each option carries the median of its own arrivals for the same reason.
             <strong> Spread</strong> is what the median hides: the most-served carrier on a lane is
             often the least predictable, and a 27-day spread means the transit you were quoted is
             not the one you can count on. <strong>Sailing window</strong> separates a service that
-            is small from one that is <em>ending</em>. <strong>Dates</strong> counts distinct
-            departures, not connections: several onward vessels off one feeder are one chance to
-            ship, not four. <strong>Direct</strong> reads “none” when this snapshot holds no direct
-            sailing, which is not the same as the carrier running none.
+            is small from one that is <em>ending</em>. <strong>Direct</strong> reads “none” when
+            this snapshot holds no direct sailing, which is not the same as the carrier running
+            none.
           </p>
         </section>
 
@@ -205,8 +214,8 @@ export function AnalyticsView() {
                 <th>Via</th>
                 <th>Discharge</th>
                 <th className="an-num">TS</th>
-                <th className="an-num">Dates</th>
-                <th className="an-num">Conns</th>
+                <th className="an-num" title="Quotable options on this routing. More than Dates when two carriers sail it on the same day.">Options</th>
+                <th className="an-num" title="Days this routing departs on">Dates</th>
                 <th>Carriers</th>
                 <th className="an-num">Transit — median / range</th>
                 <th>Next ETD</th>
@@ -226,8 +235,8 @@ export function AnalyticsView() {
                     )}
                   </td>
                   <td className="an-num">{c.ts}</td>
-                  <td className="an-num an-strong">{c.sailDates}</td>
-                  <td className="an-num an-dim">{c.departures}</td>
+                  <td className="an-num an-strong">{c.options}</td>
+                  <td className="an-num an-dim">{c.sailDates}</td>
                   <td className="an-carriers">{c.carriers.join(" ")}</td>
                   <SpreadCell s={c.transit} />
                   <td>{c.nextEtd?.slice(0, 10) ?? "—"}</td>
