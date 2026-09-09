@@ -37,10 +37,34 @@ many lanes, and a search only ever holds one.
 
 | Phase | Source | Answers | Status |
 |---|---|---|---|
-| **1 — Current market** | `schedules_latest_secure` | What is the market doing right now? | **Build this** |
+| **1 — Current market** | `schedules_latest_secure` | What is the market doing right now? | **Partly shipped — see below** |
 | **2 — Historical** | `schedules` base table | How is the market changing? Who keeps their promises? | Later |
 
 Everything in this document is phase 1 unless explicitly marked.
+
+## What is actually built, as of 2026-09-08
+
+| | Status | Where |
+|---|---|---|
+| Fetch + paging, whole current market | **shipped** | `src/state/useMarketSnapshot.ts` |
+| Connection dedupe, spread, cadence | **shipped** | `src/lib/analytics/departures.ts` |
+| Port-complex folding | **shipped** | `src/lib/analytics/ports.ts` |
+| View A — corridor **list** | **shipped** | `corridorStats()` |
+| View B — carrier comparison, per lane | **shipped** | `carrierStats()` |
+| Lane verdict banner | **shipped** | `src/lib/analytics/rfq.ts` |
+| Weekly email report | **shipped** (not in the original scope) | `src/lib/report/` |
+| Carrier staleness per carrier | **shipped** | `scrapedByCarrier` |
+| **View C — carrier profile across lanes** | **not built** | — |
+| **Peer delta / self-relative baseline** | **not built** | — |
+| **The map and all corridor geometry** | **not built** | — |
+| Cadence, cutoff runway, concentration, POD substitution, TS risk | not built | ideas 2–6 below |
+
+Tests: `npm test` runs `tools/check-analytics.mjs` and `tools/check-report.mjs` against the real
+`.ts` sources through a Node resolver hook, so the ordering rules are asserted without a browser or
+a database.
+
+**Read Views A and B below as descriptions of shipped behaviour, and View C and Route Geometry as
+design.**
 
 ## What the MV actually holds
 
@@ -78,6 +102,16 @@ Two consequences, and the second is worse than the first:
 refreshed. Silent absence is the failure mode here — a carrier vanishing looks identical to a
 carrier having no service.
 
+**Shipped.** `useMarketSnapshot` returns `snapshotAt` and a per-carrier `scrapedByCarrier` map,
+rendered as a **Scraped** column on every carrier row and a snapshot date in the header. The view
+now reads `schedules_latest_secure`, which applies the freshness window at query time rather than
+at refresh time, so a carrier is absent rather than silently stale.
+
+A related trap the window creates, handled separately: a carrier's published routing can change
+between scrapes, so the newest snapshot can hold **zero direct sailings for a carrier that runs
+them.** WHL was entirely direct on three scrape dates and entirely transshipped on two others.
+The Direct column therefore renders **"none"**, never `0` — `CarrierRow.directUnknown`.
+
 ---
 
 # Data Foundation
@@ -102,12 +136,14 @@ From `src/types/schedule.ts`:
 | `ts_ports: string[]` | **the transshipment path — core of corridor identity** |
 | `port_of_discharge` | ocean terminus, lane key |
 | `last_cy` | inland terminus; a rail leg is derived from it |
-| `transport_type` | `Direct` / `1 TS` / `2 TS` |
+| `transport_type` | **not used.** Depth comes from `ts_ports.length` — see "Never branch on `transport_type`" |
 | `transit_time_days` | the comparison metric |
 | `etd`, `eta` | cadence, gaps, next departure |
 | `cutoff_date` | booking runway |
 | `carrier_code` | grouping key for Views B and C |
-| `mother_vessel` | **part of departure identity — see Counting Rules** |
+| `mother_vessel` | **NOT part of connection identity** — often the feeder, see Counting Rules |
+| `vessel_sequence` | part of connection identity |
+| `ts_vessels` | the ocean vessel when `mother_vessel` is the feeder |
 
 ## What is NOT in the data
 
@@ -120,7 +156,7 @@ Corridors end at `last_cy`; the final drayage to the door is outside this datase
 
 > This section exists because getting it wrong makes the headline number wrong by a third, silently.
 
-## A departure is not a row
+## A departure is not a row — but the fix below was wrong
 
 The same physical sailing appears **once per Last CY it serves**. One vessel discharging at Long
 Beach and railing to Los Angeles, Salt Lake City and Memphis is **one departure and three rows**.
@@ -130,14 +166,69 @@ Beach and railing to Los Angeles, Salt Lake City and Memphis is **one departure 
 | `schedules_latest` (phase 1) | 1,487 | 1,100 | **+35%** |
 | `schedules` (phase 2) | 3,319 | 1,960 | **+69%** |
 
-**Rule:** a departure is distinct on
+**This draft then prescribed deduplicating on `(carrier_code, mother_vessel, etd,
+port_of_discharge)`. Do not. It is wrong for this data, and measurement settles it.** On
+Semarang → Los Angeles:
 
 ```
-(carrier_code, mother_vessel, etd, port_of_discharge)
+200  raw rows
+120  under that key          <- discards 40% of real options
+198  distinct connections
 ```
+
+Across the whole current-market view, 2,865 rows hold 2,832 distinct connections. **Genuine
+duplication is ~1%, not 57%.**
+
+What that key collapses is not duplicates. `mother_vessel` is frequently the **feeder** — the ship
+from the load port to the hub — while the ocean vessel sits in `ts_vessels`. So one feeder sailing
+legitimately appears several times with different onward vessels:
+
+```
+ONE  HIGHWAY  2026-09-09 -> Los Angeles via Singapore
+     onward MOL COURAGE / YM MOVEMENT / ...  ETAs Oct 8, 9, 13, 14  transit 32, 33, 37, 38
+```
+
+Four arrivals, four transits, **four things a customer can be sold.** Folding them into one and
+keeping whichever row came first discards the options this view exists to compare, and makes the
+result depend on row order.
+
+### The shipped rule: a CONNECTION
+
+The unit is one bookable way to move the box from POL to Last CY:
+
+```
+(carrier_code, etd, eta, port_of_discharge, vessel_sequence, ts_ports)
+```
+
+`ts_ports` is in the key even though `vessel_sequence` already is, because the two can disagree: EMC
+publishes EVER BIRTH departing 2026-09-12 for Los Angeles both via Kaohsiung *and* via Taipei, on
+the same vessels. Leave routing out and those collapse into one, with row order deciding which
+survives — the Taipei corridor lost a connection to Kaohsiung exactly that way before this was
+added.
+
+`last_cy` is **excluded**, so a market-wide view spanning several inland ramps does not count one
+connection several times. That is the original concern above, handled where it is real: measured, it
+affects 45 rows of 2,865, and it matters when counting sailings *across* lanes — it never licensed
+collapsing *within* one.
+
+Implemented as `dedupeConnections()` in `src/lib/analytics/departures.ts`.
+
+### Connections vs sail dates
+
+Because a connection is an *option*, not a departure, the two counts answer different questions and
+**both are shown**:
+
+| | Counts | Answers |
+|---|---|---|
+| **Connections** | bookable options | how many ways there are |
+| **Sail dates** | distinct ETD days | **how many chances there are to get a box away** |
+
+Sail dates is the headline. On Semarang → Los Angeles, ONE shows 78 connections against HMM's 42 —
+but ONE's are 9 departures inside a 12-day window while HMM's are 18 dates across 40 days. Ranked on
+connections ONE leads two to one; on the chance of shipping it is clearly third.
 
 Never `rows.length`. Never `count(*)`. **Deduplicate before any metric is computed**, not per view —
-otherwise the three views will disagree about how much service exists.
+otherwise the views disagree about how much service exists.
 
 ## Port names must be normalised first
 
@@ -189,15 +280,50 @@ Duplicated, it produces two different corridor counts in two different places.
 
 ## Goal
 
-Segment a point-to-point lane into its distinct routing shapes, and show them on a map.
+Segment a lane into its distinct routing shapes, so the reader can see every way the market
+currently achieves that move.
+
+## The lane is POL → LAST CY
+
+**Not POL → POD.** Last CY is where the customer's box actually ends up; the discharge port is a
+routing *choice* made to get it there. Keying the lane on POD would split one commercial lane into
+several and make carriers serving it different ways look like they serve different markets.
+
+**This is what makes the corridor table the point of the view rather than a detail of it.** Someone
+moving goods from Cartagena to Cincinnati has one lane and one question — *how is that done?* — and
+the answer is a list: discharge at Norfolk, or Savannah, or New York, each with its own
+transshipment path, transit spread and carriers. Those are alternatives to weigh, not separate
+markets, and only a POL → Last CY lane puts them on one screen.
+
+So a lane holding several PODs is **expected and desirable**, not fragmentation to be cleaned up.
+The corridor table is where the full picture of a single commercial move lives.
 
 ## Corridor identity
 
 ```
-POL → [normalised TS ports, in order] → POD → Last CY
+[normalised TS ports, in order] → POD
 ```
 
-Order matters. `Port Klang → Shekou` is not the same corridor as `Shekou → Port Klang`.
+within a lane already fixed at POL → Last CY. Order matters: `Port Klang → Shekou` is not the same
+corridor as `Shekou → Port Klang`.
+
+**POD is part of the corridor even though it is not part of the lane**, and for an inland Last CY it
+is the single biggest thing separating one routing from another. Measured on `Salt Lake City, UT`,
+reached through four discharge ports:
+
+| POD | Connections | Median |
+|---|---|---|
+| Long Beach, CA | 11 | 31.0d |
+| Los Angeles, CA | 36 | 33.5d |
+| Oakland, CA | 77 | 40.0d |
+| Houston, TX | 12 | 77.5d |
+
+Same box, same final destination, **46 days between the best and worst way of getting there** — a
+Gulf discharge with a long rail leg against a West Coast one. Collapsing those into one lane average
+would hide the entire decision.
+
+Implemented as `routeLabel()` in `src/lib/analytics/ports.ts`; corridor rows are built by
+`corridorStats()` in `src/lib/analytics/lane.ts`.
 
 ## The rail leg is derived
 
@@ -214,13 +340,36 @@ Measured: 1,177 of 3,319 rows (35%) across 53 distinct pairs.
 
 Together, 435 rows — **37% of everything the rule calls "rail."**
 
-**Proposed general fix:** a distance guard. `pod_geom` and `last_cy_geom` are already populated, so
-treat anything under **~30 miles** as one node with no rail leg. This handles both cases without a
-hand-maintained exception list that grows forever. Untested — see Open Questions.
+**Shipped: a port-complex list, not the distance guard.** The proposal here was a ~30-mile geometry
+check. What went in instead is an explicit `COMPLEXES` table in `src/lib/analytics/ports.ts`, and
+the rail test is `!samePlace(pod, last_cy)`.
+
+The distance guard was the more general idea and is the weaker one. Two berths belong together when
+a box landing at either is **the same operational outcome** — same rail ramps, same drayage market —
+and that is a commercial judgement, not a distance. A guard tuned to swallow Long Beach → Los
+Angeles (~5 miles) says nothing about whether Seattle and Tacoma should fold, and a guard loose
+enough to catch a genuine short rail move would be wrong in the other direction. The list is
+deliberately conservative and carries its reasoning: today it holds San Pedro Bay only, with
+Seattle/Tacoma and New York/Newark named as plausible next entries that are *not* added on a guess.
+
+**The complex folds at lane level too**, which the earlier draft did not anticipate. Carriers
+publish Last CY as either `Los Angeles, CA` or `Long Beach, CA` for what is commercially one
+delivery; keying the lane on the raw value split seven load ports into two lanes apiece, and Ho Chi
+Minh → Long Beach carried 69 departures that never appeared in the Ho Chi Minh → Los Angeles table.
+Half a market missing from a comparison is worse than an extra row in a lane picker.
+
+Scope is routing identity only: transshipment counts still come from `ts_ports`, and
+`CarrierRow.pods` still lists discharge ports as published, so a reader who needs the berth can see
+it.
 
 ## Per-corridor metrics
 
-Departures · carriers running it · transit **min / median / max** · next ETD · cadence · TS count.
+Shipped in `CorridorRow`: via path · POD · TS count · rail-leg flag · **sail dates** · connections ·
+carriers · transit **min / median / max** · next ETD.
+
+**Dates and connections are both shown, and dates is the headline.** One departure can be published
+as several bookable connections when a carrier offers different onward vessels off the same feeder —
+four arrivals a customer could be sold, but one chance to get a box away. See Counting Rules.
 
 ## Why spread, not average
 
@@ -238,9 +387,11 @@ The **transshipment corridor via Shekou has a faster best case than direct** —
 while being **6 days worse on average.** Averages alone would tell you to dismiss it. Spread tells
 you the truth: inconsistent, but its good sailings are the fastest thing on the lane.
 
-**Never display a corridor average without its range.**
+**Never display a corridor average without its range.** Shipped as `SpreadCell`, which also prints
+`n/of` when some connections have no published transit — `transit_time_days` is genuinely null in
+production, and a confident median over an unstated subset is worse than saying so.
 
-## The map
+## The map — NOT BUILT
 
 - **MapLibre GL** with **OpenFreeMap** vector tiles — no API key, no billing.
 - **Great-circle polylines per leg**, not straight Mercator lines. A straight line from Nhava Sheva
@@ -253,6 +404,9 @@ you the truth: inconsistent, but its good sailings are the fastest thing on the 
 - **Antimeridian:** Asia→US Pacific corridors cross ±180°. Split those lines or they draw backwards
   across the whole map.
 
+The corridor **list** is shipped; none of the geometry below it is. See Route Geometry, which
+remains a design rather than a description.
+
 ---
 
 # View B — Carrier Comparison
@@ -264,10 +418,64 @@ granularity on purpose: the "who should I be talking to" view.
 
 **No map.** Table-shaped data; a map would add nothing.
 
-## Metrics
+Scoped to **one lane at a time**, driven by the lane picker — not the whole market at once.
 
-Departures · corridors offered · Direct / 1 TS / 2 TS share · transit min / median / max · cadence ·
-next departure · largest gap.
+## Metrics — as shipped in `CarrierRow`
+
+Direct / 1 TS / 2+ TS **dates** · total dates · avg TS · main service and its median · all-sailings
+median / range · spread · vs lane · sailing window · last scraped.
+
+Three of these were not in the original list and each exists because a measured row was misleading
+without it:
+
+**Direct / 1 TS / 2+ TS count DATES, each under its best routing that day.** Counting dates per
+routing type made the columns overlap — HPL on Semarang → Savannah sails 7 dates and offers both a
+1 TS and a 2 TS on three of them, so the columns read 7 and 3 against 7 total, invited addition and
+did not add up. Classifying each date by its **shallowest** option is also the operationally true
+reading: given a direct and a 2 TS the same day you book the direct, so that is what the day is
+worth. The three now always sum to Dates. Routing depth is not lost — `avgTs` still measures it
+across every connection.
+
+**Main service** is the routing a carrier runs on the most dates, with the median *that* routing
+delivers — the honest headline, not the best case. WHL shows a 15-day best on Semarang → Los Angeles
+while the service it actually offers runs 20.5. Chosen by dates rather than connections, because
+connections name routings that are merely *duplicated* rather than frequent: OOCL on Ho Chi Minh →
+Los Angeles had a Ningbo double-transship with 8 connections across 2 dates against a direct with 3
+across 3, so connections named the 2 TS chain as its main service on a row whose date columns read
+4 direct — a flat contradiction on one line.
+
+**Sailing window** (first → last ETD) separates a service that is *small* from one that is *ending*.
+On Semarang → Savannah, EMC's four dates run Aug 30 – Sep 12 while HMM runs to Oct 23: fine for a
+box moving in ten days, useless beyond that, and identical without this column.
+
+**Spread** gets its own column rather than living inside the range, because it decides bookings and
+was unreadable there. On Semarang → Savannah HMM has the most sailings on the lane and a 27-day
+spread (38–65) against MSC's 10 (40–50) — the best-served carrier is the least predictable, which
+the median conceals.
+
+## No score, and no tier label
+
+Both were built and **deliberately removed.** An earlier version ranked carriers with a weighted
+"chances" number and tagged each row Preferred / Viable / Avoid. A score asks the reader to trust an
+arithmetic they did not choose; a label states the conclusion instead of letting them reach it.
+
+**The sort is the argument.** Ordered by direct dates → fewest average transshipments → thin
+services demoted → median → dates. The carrier worth calling is the top row, and every column that
+put it there is on that row.
+
+Two refinements the ordering needed, both from real lanes:
+
+- **Thin services drop behind substantial ones before speed is considered.** A fast median off three
+  departures is not the same claim as one off twenty; without this the smaller number simply wins.
+  Ordering on median alone put COS second on Semarang — 29 days across 3 sailings, ahead of HMM's 31
+  across 20. "Thin" is relative to the lane (a quarter of the best-served carrier's dates), because
+  a busy lane and a quiet one cannot share an absolute threshold.
+- **But a thin service that is materially faster is not demoted.** The rule exists to stop three
+  sailings outranking twenty on a two-day edge, not to bury a real advantage. EMC on Semarang →
+  Savannah runs 4 dates at 44.5 against a 54.5-day lane — ten days, 18% — and sank to last behind
+  carriers it beats outright. **Naming a carrier in an RFQ costs nothing** — it is a rate request,
+  not a booking — so a candidate that good must surface and let the reader weigh its 4 dates. The
+  margin is 10% of the lane median: it clears EMC's 18% while still catching 29-against-30 at 3%.
 
 ## Reading it
 
@@ -277,6 +485,17 @@ Two carriers with identical average transit are not equivalent:
 - **fortnightly, 2 TS, wide spread** → opportunistic volume
 
 The table makes that distinction visible before rates are negotiated, not after.
+
+## The lane verdict
+
+One line above the table saying what kind of market this is — `healthy` / `mixed` / `tough`
+(`laneVerdict()` in `src/lib/analytics/rfq.ts`). **Descriptive, not prescriptive:** an earlier
+version printed a ready-made "please quote HMM and WHL" sentence, which turns a table the reader can
+interrogate into an instruction they must trust.
+
+It exists because a lane with no direct service has to read as a **hard market** rather than as a
+broken screen — 10 of the 51 lanes in the current snapshot have none, and direct is only 19% of
+connections market-wide. Silence there looks like a bug and gets the whole view distrusted.
 
 ---
 
@@ -769,14 +988,23 @@ inconsistent and neither will be trusted.
 
 ## Suggested phasing
 
-1. **Pure functions first** — dedupe, normalisation, corridor keys, lane aggregates, deltas.
-   `Schedule[]` in, plain objects out. No React, no map.
-2. **View C (carrier profile), peer-relative only** — highest value per unit of work, needs no map,
-   and every number in it is already tabulated above to check against. Make `peerDelta` a first-class
-   field on the per-(carrier, lane) record, because step 6 reads it again.
-3. **View B (carrier comparison)** — mostly a re-aggregation of the same primitives.
-4. **View A list** — corridors as rows.
-5. **The map last** — purely a rendering of data already proven correct.
+1. ~~**Pure functions first**~~ — **done.** Dedupe, normalisation, corridor keys, lane
+   aggregates. `Schedule[]` in, plain objects out, no React, no map — which is what lets
+   `tools/check-analytics.mjs` assert the ordering rules in Node.
+2. **View C (carrier profile), peer-relative only** — **not built, and now the biggest gap.** Steps
+   3 and 4 were done first because a per-lane table was what the team needed to run an RFQ; the
+   cross-lane profile is still the highest-value thing left. Needs no map, and every number in it
+   is already tabulated below to check against. Make `peerDelta` a first-class field on the
+   per-(carrier, lane) record, because step 6 reads it again.
+
+   Note `carrierStats` already computes `vsLaneMedian` — a carrier against the lane's MEDIAN
+   CARRIER, within one lane. That is not `peerDelta` (their mean against the lane's mean, across
+   every lane they run) and should not be mistaken for a head start on it.
+3. ~~**View B (carrier comparison)**~~ — **done**, and it became the primary table rather than a
+   secondary one: scoped per lane, it is the screen someone actually reads before an RFQ.
+4. ~~**View A list**~~ — **done**, corridors as rows beneath the carrier table.
+5. **The map last** — purely a rendering of data already proven correct. Still last, still
+   unbuilt.
 6. **Self-relative baseline** — a toggle on View C between "vs other carriers on this lane" and "vs
    this carrier's own network". Deliberately last, and cheap by then: it is an aggregation over the
    `peerDelta` column from step 2, not a new query.
@@ -789,16 +1017,36 @@ opening a browser. Build the map first and the only way to test a count is to lo
 
 # Open Questions
 
-**1. POD / Last CY exceptions.** The ~30-mile distance-guard proposal is untested. Confirm it
-suppresses Long Beach→Los Angeles and Semarang→Semarang without eating a legitimate short rail move.
-Deferred by decision.
+**1. POD / Last CY exceptions — ANSWERED, differently.** The ~30-mile distance guard was not built.
+The shipped answer is the explicit `COMPLEXES` list in `ports.ts`, because "same place" is a
+commercial judgement about rail ramps and drayage markets rather than a distance. See View A.
+*Remaining:* `Semarang → Semarang, Indonesia` is a naming variant, not a complex, and is still
+flagged as a rail leg. That wants normalisation of Last CY, not a complex entry — see question 5.
 
-**2. The 5-day window.** COSCO is absent from the MV today. Is the right answer to widen the
-window, surface staleness per carrier in the UI, or fall back to each carrier's most recent snapshot
-regardless of age? This affects the correctness of every lane average in View C, so it needs an
-answer before that view is trusted.
+**2. The 5-day window — ANSWERED.** Surface staleness per carrier, and read the query-time-guarded
+`schedules_latest_secure` rather than the materialized view. Shipped as `scrapedByCarrier` and the
+Scraped column. The window was not widened and no fallback to older snapshots was added: a stale
+number presented as current is the worse failure.
 
-**3. Minimum-sample thresholds.** ≥4 departures and ≥3 carriers were used for the measured tables
-here. They are reasonable, not derived. Worth tuning once the view is in use.
+**3. Minimum-sample thresholds — STILL OPEN, and now scoped differently.** ≥4 departures and ≥3
+carriers were thresholds for View C, which is unbuilt. What shipped instead is the *thin service*
+rule in `carrierStats`: a carrier with under a quarter of the best-served carrier's sail dates sorts
+behind substantial ones, **unless** it is materially faster (≥10% of the lane median). Both
+constants are reasonable rather than derived. Note they are visible in the **sort** rather than
+hidden in a filter — nothing is dropped, only ordered, which is the right default for a view whose
+output is a rate request rather than a booking.
 
-**4. `Xiaochan Beach`** — verify what port this actually is before drawing a line through it.
+**4. `Xiaochan Beach`** — verify what port this actually is before drawing a line through it. Moot
+until the map exists.
+
+**5. NEW — Last CY naming variants split lanes.** `canonicalPort` folds port *complexes*, but there
+is no general normalisation of Last CY spellings, and `lanesIn` keys on the folded raw value. So
+`Cartagena, Colombia → Cincinnati, OH` and `Cartagena, Colombia → Cincinnati` are one commercial
+lane appearing as two entries — splitting the very picture View A exists to give, and quietly
+shrinking both halves.
+
+This is the Counting Rules normalisation requirement applied to **Last CY** rather than to
+transshipment ports, and it has the same character: it would not look broken, it would look
+plausible and be wrong. It is a prerequisite for the lane picker being trustworthy, and it is
+cheaper than the corridor-fragmentation case because the fix is one resolver rather than a
+re-keying.
