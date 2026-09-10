@@ -140,6 +140,12 @@ export function App() {
           pol={lastSearch?.pol ?? ""}
           radiusMiles={lastSearch?.radiusMiles ?? 0}
           searching={status === "loading"}
+          // The same POD filter state the grid writes, so switching a discharge port off in one
+          // view switches it off in all three. `availablePods` comes from the unfiltered rows, or
+          // a port switched off could never be switched back on.
+          availablePods={availablePods}
+          excludedPods={excludedPods}
+          onExcludedPodsChange={setExcludedPods}
         />
       ) : (
         <SchedulesGrid

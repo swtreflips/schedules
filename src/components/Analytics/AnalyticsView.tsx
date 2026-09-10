@@ -1,4 +1,11 @@
-import { useMemo, type ReactNode } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import {
   carrierStats,
   corridorStats,
@@ -6,8 +13,10 @@ import {
   type Lane,
   type Service,
 } from "../../lib/analytics/lane";
+import { canonicalPort } from "../../lib/analytics/ports";
 import { laneVerdict } from "../../lib/analytics/rfq";
 import { useDrayage } from "../../state/useDrayage";
+import { PodFilterPopover } from "../SchedulesGrid/PodFilterPopover";
 import { ReportButton } from "./ReportButton";
 import type { Spread } from "../../lib/analytics/departures";
 import type { Schedule } from "../../types/schedule";
@@ -285,9 +294,74 @@ interface Props {
   pol: string;
   radiusMiles: number;
   searching: boolean;
+  /**
+   * Every discharge port the search returned, BEFORE filtering — so a port that has been switched
+   * off can still be switched back on. Raw names, as published.
+   */
+  availablePods: string[];
+  excludedPods: Set<string>;
+  onExcludedPodsChange: Dispatch<SetStateAction<Set<string>>>;
 }
 
-export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }: Props) {
+export function AnalyticsView({
+  rows,
+  destination,
+  pol,
+  radiusMiles,
+  searching,
+  availablePods,
+  excludedPods,
+  onExcludedPodsChange,
+}: Props) {
+  const [podAnchor, setPodAnchor] = useState<DOMRect | null>(null);
+  const podTrigger = useRef<HTMLButtonElement>(null);
+
+  /**
+   * The filter lists what the COLUMN shows, which is the folded name, while `excludedPods` keys on
+   * the berth as published — the same set Plan and Rank write, so switching a port off in one view
+   * switches it off in all three.
+   *
+   * Those two are not the same string for a complex: the column reads `Los Angeles/Long Beach, CA`
+   * where the rows carry `Los Angeles, CA` and `Long Beach, CA`. Listing raw names here would show
+   * two entries for a port the table draws as one. So the list is folded and a toggle writes
+   * through to every berth underneath it.
+   */
+  const podGroups = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const p of availablePods) {
+      const key = canonicalPort(p);
+      const bucket = m.get(key);
+      if (bucket) bucket.push(p);
+      else m.set(key, [p]);
+    }
+    return m;
+  }, [availablePods]);
+
+  const podOptions = useMemo(() => [...podGroups.keys()].sort(), [podGroups]);
+
+  // Excluded only when every berth under it is. A half-excluded complex reads as available, and
+  // toggling it then switches the whole thing off — which is what the single checkbox promises.
+  const excludedGroups = useMemo(() => {
+    const out = new Set<string>();
+    for (const [key, members] of podGroups) {
+      if (members.every((m) => excludedPods.has(m))) out.add(key);
+    }
+    return out;
+  }, [podGroups, excludedPods]);
+
+  const togglePodGroup = (key: string) => {
+    const members = podGroups.get(key) ?? [];
+    onExcludedPodsChange((prev) => {
+      const next = new Set(prev);
+      const allOff = members.every((m) => next.has(m));
+      for (const m of members) {
+        if (allOff) next.delete(m);
+        else next.add(m);
+      }
+      return next;
+    });
+  };
+
   // Every place the box could be handed over, for one round-trip to the router.
   const lastCys = useMemo(
     () => [...new Set(rows.map((r) => r.last_cy).filter(Boolean))],
@@ -412,7 +486,38 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
                 <th className="an-num" title="Quotable options: one routing, on one day. Direct + 1 TS + 2+ TS always add up to this, because an option has exactly one routing depth.">Options</th>
                 <th className="an-num" title="Days a box can actually leave on. Fewer than Options means several routings share a departure day.">Dates</th>
                 <th className="an-num" title="Mean transshipments per option. Lower is a shorter, less fragile route.">Avg TS</th>
-                <th className="an-group-start" title="Where the box comes off the ship">POD</th>
+                {/* The same filter Plan and Rank carry, writing the same `excludedPods` set — so
+                    switching a discharge port off here switches it off everywhere. It is the answer
+                    to a carrier publishing rail variants you would rather not look at: turn off New
+                    York and the cross-country routings leave the table, without the analytics ever
+                    deciding for you that they do not count. */}
+                <th className="an-group-start">
+                  <button
+                    ref={podTrigger}
+                    type="button"
+                    className={"pod-header" + (excludedGroups.size ? " pod-header--active" : "")}
+                    disabled={!podOptions.length}
+                    aria-haspopup="dialog"
+                    title="Filter by Port of Discharge — the same filter as Plan and Rank"
+                    onClick={() =>
+                      setPodAnchor((a) =>
+                        a ? null : (podTrigger.current?.getBoundingClientRect() ?? null),
+                      )
+                    }
+                  >
+                    <span>POD</span>
+                    {excludedGroups.size > 0 && (
+                      <span className="pod-header__count">
+                        {podOptions.length - excludedGroups.size}/{podOptions.length}
+                      </span>
+                    )}
+                    {podOptions.length > 0 && (
+                      <span className="pod-header__caret" aria-hidden>
+                        ▾
+                      </span>
+                    )}
+                  </button>
+                </th>
                 <th title="The hand-offs, in order, before that discharge. Reads “direct” when the box stays on one ship the whole way.">TS chain</th>
                 <th title="Where the carrier's responsibility ends and your drayage starts. Often the discharge port; when it is not, the carrier is moving the box inland for you.">Last CY</th>
                 <th className="an-num" title="Options on that routing — one routing, on one day">Options</th>
@@ -564,6 +669,19 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
           </table>
         </section>
       </div>
+
+      {/* Portalled to the body by the popover itself, so the table's own scrolling cannot clip it. */}
+      {podAnchor && (
+        <PodFilterPopover
+          available={podOptions}
+          excluded={excludedGroups}
+          anchor={podAnchor}
+          onTogglePod={togglePodGroup}
+          onSelectAll={() => onExcludedPodsChange(new Set())}
+          onSelectNone={() => onExcludedPodsChange(new Set(availablePods))}
+          onClose={() => setPodAnchor(null)}
+        />
+      )}
     </div>
   );
 }
