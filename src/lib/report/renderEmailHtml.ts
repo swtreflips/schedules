@@ -1,3 +1,4 @@
+import { cityLabeller } from "../analytics/ports";
 import type { CarrierRow, Service } from "../analytics/lane";
 import type { LaneTable, WeeklyReport } from "./weeklyReport";
 
@@ -101,10 +102,18 @@ function stackedCell(c: CarrierRow, render: (s: Service) => string): string {
     .join("<br>");
 }
 
-/** The hand-offs before discharge. Says "direct" rather than leaving a gap. */
-const viaCell = (c: CarrierRow) =>
+/**
+ * The hand-offs before discharge. Says "direct" rather than leaving a gap.
+ *
+ * CITY ONLY, as on the screen — the country costs a line's worth of width per hop across 73 tables,
+ * and these hubs read fine without it. The discharge port beside it keeps its full name, because
+ * that is the one a booking is made against.
+ */
+const viaCell = (c: CarrierRow, city: (p: string) => string) =>
   stackedCell(c, (s) =>
-    s.via.length ? esc(s.via.join(" > ")) : `<span style="color:${MUTED}">direct</span>`,
+    s.via.length
+      ? esc(s.via.map(city).join(" > "))
+      : `<span style="color:${MUTED}">direct</span>`,
   );
 
 /** Where the box comes off the ship, and whether the carrier keeps going from there. */
@@ -180,7 +189,7 @@ const carrierHeader =
   th("Scraped") +
   "</tr>";
 
-function carrierRow(c: CarrierRow, scraped: string | undefined): string {
+function carrierRow(c: CarrierRow, scraped: string | undefined, city: (p: string) => string): string {
   const vs =
     c.vsLaneMedian == null
       ? `<span style="color:${FAINT}">—</span>`
@@ -214,7 +223,7 @@ function carrierRow(c: CarrierRow, scraped: string | undefined): string {
     td(`<strong>${c.options}</strong>`, true) +
     td(`<span style="color:${MUTED}">${c.sailDates}</span>`, true) +
     td(c.avgTs.toFixed(2), true) +
-    td(viaCell(c)) +
+    td(viaCell(c, city)) +
     td(podCell(c)) +
     td(optionsCell(c), true) +
     td(serviceMedianCell(c), true) +
@@ -234,14 +243,14 @@ function carrierRow(c: CarrierRow, scraped: string | undefined): string {
   );
 }
 
-const laneSection = (t: LaneTable, scraped: Map<string, string>) =>
+const laneSection = (t: LaneTable, scraped: Map<string, string>, city: (p: string) => string) =>
   `<p style="margin:26px 0 2px;font-family:${FONT};font-size:15px;font-weight:600;color:${INK};">` +
   `${esc(t.pol)} — ${esc(t.destination)}</p>` +
   `<p style="margin:0 0 6px;font-family:${FONT};font-size:11px;color:${MUTED};text-transform:uppercase;letter-spacing:.06em;">` +
   `Carriers — most direct first, then fewest transshipments` +
   (t.laneMedian == null ? "" : ` · lane median ${t.laneMedian}d`) +
   `</p>` +
-  table(carrierHeader + t.carriers.map((c) => carrierRow(c, scraped.get(c.carrier))).join(""));
+  table(carrierHeader + t.carriers.map((c) => carrierRow(c, scraped.get(c.carrier), city)).join(""));
 
 /**
  * GMAIL CLIPS A MESSAGE NEAR 102 KB, and a clipped report is worse than a short one — the reader
@@ -292,12 +301,18 @@ export function renderEmailHtml(r: WeeklyReport, full = false): string {
     `the same place.` +
     `</div></div>`;
 
+  // ONE LABELLER FOR THE WHOLE DOCUMENT, not one per table: a hub has to read the same in every
+  // table it appears in, or the reader has to notice that it changed.
+  const city = cityLabeller(
+    r.lanes.flatMap((l) => l.carriers.flatMap((c) => c.services.flatMap((sv) => sv.via))),
+  );
+
   const parts: string[] = [];
   let spent = bytes(head) + bytes(legend);
   let shown = 0;
 
   for (const lane of r.lanes) {
-    const block = laneSection(lane, r.scrapedByCarrier);
+    const block = laneSection(lane, r.scrapedByCarrier, city);
     const cost = bytes(block);
     if (!full && spent + cost > SIZE_BUDGET) break;
     parts.push(block);
@@ -316,6 +331,9 @@ export function renderEmailHtml(r: WeeklyReport, full = false): string {
 
 /** Plain-text fallback, so a client that refuses HTML still shows something legible. */
 export function renderEmailText(r: WeeklyReport): string {
+  const city = cityLabeller(
+    r.lanes.flatMap((l) => l.carriers.flatMap((c) => c.services.flatMap((sv) => sv.via))),
+  );
   const lines: string[] = [r.subject, ""];
   lines.push(
     `${r.coverage.carriers} carriers, ${r.coverage.lanes} port pairs, ${r.coverage.sailings} options` +
@@ -333,7 +351,7 @@ export function renderEmailText(r: WeeklyReport): string {
         ? shown
             .map(
               (s) =>
-                `${s.via.length ? s.via.join(" > ") + " > " : ""}${s.discharge}${s.railLeg ? " (rail)" : ""}` +
+                `${s.via.length ? s.via.map(city).join(" > ") + " > " : ""}${s.discharge}${s.railLeg ? " (rail)" : ""}` +
                 ` x${s.options} ${num(s.median)}d`,
             )
             .join(" | ")

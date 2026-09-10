@@ -13,7 +13,7 @@ import {
   type Lane,
   type Service,
 } from "../../lib/analytics/lane";
-import { canonicalPort } from "../../lib/analytics/ports";
+import { canonicalPort, cityLabeller } from "../../lib/analytics/ports";
 import { laneVerdict } from "../../lib/analytics/rfq";
 import { useDrayage } from "../../state/useDrayage";
 import { PodFilterPopover } from "../SchedulesGrid/PodFilterPopover";
@@ -149,12 +149,15 @@ function StackedCell({
 }
 
 /** The hand-offs, in order. A direct sailing says so rather than leaving the cell blank. */
-const ViaCell = ({ c }: { c: CarrierRow }) => (
+const ViaCell = ({ c, city }: { c: CarrierRow; city: (p: string) => string }) => (
   <StackedCell
     c={c}
     className="an-group-start"
+    // CITY ONLY. The country is a line's worth of width per hop and these hubs are recognisable
+    // without it; the full names stay one hover away, which is where the Manzanillo-Panama /
+    // Manzanillo-Mexico distinction lives if a path ever needs it.
     render={(s) =>
-      s.via.length ? s.via.join(" > ") : <span className="an-dim">direct</span>
+      s.via.length ? s.via.map(city).join(" > ") : <span className="an-dim">direct</span>
     }
     title={(s) =>
       s.via.length
@@ -408,6 +411,13 @@ export function AnalyticsView({
     () => carrierStats(rows, undefined, dray.size ? dray : undefined),
     [rows, dray],
   );
+
+  // Built from the hubs actually on screen, so a city keeps its country exactly when two ports
+  // share the name — Manzanillo being the one that does today.
+  const cityLabel = useMemo(
+    () => cityLabeller(carriers.flatMap((c) => c.services.flatMap((s) => s.via))),
+    [carriers],
+  );
   const corridors = useMemo(() => corridorStats(rows), [rows]);
 
   const lane: Lane = useMemo(
@@ -568,7 +578,7 @@ export function AnalyticsView({
                       per departure; fewer dates means a day carries several routings. */}
                   <td className="an-num an-dim">{c.sailDates}</td>
                   <td className="an-num an-strong">{c.avgTs.toFixed(2)}</td>
-                  <ViaCell c={c} />
+                  <ViaCell c={c} city={cityLabel} />
                   <PodCell c={c} />
                   <LastCyCell c={c} />
                   <OptionsCell c={c} />

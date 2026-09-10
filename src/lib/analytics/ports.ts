@@ -39,6 +39,43 @@ const CANONICAL = new Map<string, string>(
 export const canonicalPort = (port: string): string =>
   CANONICAL.get(port.trim().toLowerCase()) ?? port;
 
+/**
+ * Just the city — `Ningbo, China` -> `Ningbo`.
+ *
+ * FOR DISPLAY ONLY, and only where the context already carries the rest. Places are stored as
+ * `City, Country` internationally and `City, ST` in the US, and every comparison in this file works
+ * on the full string; dropping the tail here would fold `Manzanillo, Panama` into
+ * `Manzanillo, Mexico` — 2,900 km apart, and a confusion the MSK scraper had to be fixed for.
+ *
+ * Used on the transshipment path, where the country adds a line's worth of width per hop and the
+ * hubs are recognisable without it. The discharge port and the Last CY keep their full names,
+ * because those are the ones a booking is made against.
+ */
+export const cityOf = (port: string): string => port.split(",")[0].trim();
+
+/**
+ * A shortener that keeps the country ONLY where dropping it would be ambiguous.
+ *
+ * Measured across the 52 transshipment ports in the current market, 51 city names identify their
+ * port outright and exactly one does not: `Manzanillo, Panama` and `Manzanillo, Mexico` — a
+ * Caribbean hub and a Pacific one, 2,900 km apart, and precisely the confusion the MSK scraper had
+ * to be fixed for. Printing a bare "Manzanillo" would put that ambiguity back in the one place it
+ * has already caused trouble.
+ *
+ * DERIVED FROM THE PORTS IN SCOPE, not from a list to maintain. A city that becomes ambiguous when
+ * a new hub appears starts showing its country on its own, and one that stops being ambiguous stops.
+ */
+export function cityLabeller(ports: Iterable<string>): (port: string) => string {
+  const byCity = new Map<string, Set<string>>();
+  for (const p of ports) {
+    const city = cityOf(p);
+    const bucket = byCity.get(city);
+    if (bucket) bucket.add(p);
+    else byCity.set(city, new Set([p]));
+  }
+  return (port) => ((byCity.get(cityOf(port))?.size ?? 0) > 1 ? port : cityOf(port));
+}
+
 /** True when two ports are the same place for operational purposes. */
 export const samePlace = (a: string, b: string): boolean =>
   canonicalPort(a) === canonicalPort(b);

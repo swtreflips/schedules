@@ -31,6 +31,7 @@ register(
 const { carrierStats, corridorStats, lanesIn } = await import("../src/lib/analytics/lane.ts");
 const { laneVerdict } = await import("../src/lib/analytics/rfq.ts");
 const { drayDays, doorTransit, toDray } = await import("../src/lib/analytics/drayage.ts");
+const { cityOf, cityLabeller } = await import("../src/lib/analytics/ports.ts");
 
 let failed = 0;
 const check = (name, got, want) => {
@@ -195,6 +196,32 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   check("two usable routings, three run", [deep.usableServices, deep.services.length], [2, 3]);
   check("usableOptions counts only those two", deep.usableOptions, 16);
   check("a carrier with nothing in reach reads zero", [slow.usableServices, slow.usableOptions], [0, 0]);
+}
+
+// ── THE TRANSSHIPMENT PATH SHOWS CITIES, EXCEPT WHERE THAT WOULD LIE ─────────────────
+//
+// The country costs a line's worth of width on every hop and these hubs are recognisable without
+// it. Measured across the 52 transshipment ports in the current market, 51 city names identify
+// their port outright — and exactly one does not.
+{
+  check("a city name is the part before the comma", cityOf("Ningbo, China"), "Ningbo");
+  check("...US ports the same way", cityOf("Los Angeles/Long Beach, CA"), "Los Angeles/Long Beach");
+  check("...and a bare name is left alone", cityOf("Singapore"), "Singapore");
+
+  // MANZANILLO IS THE ONE. Panama is a Caribbean hub, Mexico a Pacific one, 2,900 km apart, and it
+  // is exactly the confusion the MSK scraper had to be fixed for. A bare "Manzanillo" would put
+  // that ambiguity back in the one place it has already cost something.
+  const label = cityLabeller([
+    "Ningbo, China", "Busan, Republic Of Korea", "Manzanillo, Panama", "Manzanillo, Mexico",
+  ]);
+  check("an unambiguous hub loses its country", label("Ningbo, China"), "Ningbo");
+  check("...and an ambiguous one keeps it", label("Manzanillo, Panama"), "Manzanillo, Panama");
+  check("...both of them", label("Manzanillo, Mexico"), "Manzanillo, Mexico");
+
+  // DERIVED FROM THE PORTS IN SCOPE, so it corrects itself as the market changes rather than
+  // needing a list kept up to date.
+  const alone = cityLabeller(["Manzanillo, Panama", "Ningbo, China"]);
+  check("with only one of them in scope it shortens again", alone("Manzanillo, Panama"), "Manzanillo");
 }
 
 // ── WATER TO THE HAND-OVER POINT OUTRANKS A RAIL LEG ────────────────────────
