@@ -1,42 +1,46 @@
 import { useState } from "react";
-import type { Schedule } from "../../types/schedule";
+import { fetchMarketSnapshot } from "../../state/useMarketSnapshot";
 import { buildWeeklyReport } from "../../lib/report/weeklyReport";
 import { renderEmailHtml, renderEmailText } from "../../lib/report/renderEmailHtml";
 
 /**
- * Get the weekly report out of the app and into Outlook.
+ * The point-to-point report, out of the app and into a file or an inbox.
  *
- * COPY IS THE PRIMARY ACTION, NOT DOWNLOAD. The report exists to drive adoption, and an attachment
- * makes every reader download and open a file before they see anything — the exact friction this
- * is meant to remove. Copied as `text/html`, it pastes into a new Outlook message as the BODY, so
- * colleagues skim it in the preview pane having clicked nothing.
+ * IT ANSWERS A DIFFERENT QUESTION FROM THE SCREEN ABOVE IT, deliberately. Analytics now answers for
+ * a destination — every way of reaching a warehouse, whichever port the box lands at, with the
+ * ground leg priced in. This answers for a PORT PAIR: POL to Last CY, every carrier ending in the
+ * same place, no drayage in the comparison because there is none to tell apart. That is the stricter
+ * comparison and the one to put in front of a carrier, which is why both exist.
  *
- * A plain-text flavour goes on the clipboard alongside the HTML, so a client that refuses rich
- * paste still receives something legible rather than markup.
+ * SO IT FETCHES ITS OWN DATA, and only when pressed. The screen has one destination's worth of
+ * schedules; a point-to-point report wants every lane. Paging the whole market cost every visit to
+ * the tab until this moved behind the button.
  *
- * Download stays as the fallback: `ClipboardItem` with `text/html` is unavailable in some browsers
- * and in any non-secure context, and a button that silently does nothing is worse than one that
- * does something slightly different.
+ * GENERATE IS A DOWNLOAD, COPY IS A PASTE. The file is complete — every lane, every carrier row.
+ * The clipboard flavour keeps the size budget, because Gmail clips a message near 102 KB and a
+ * truncated paste is a silent failure in someone else's inbox.
  */
 
-interface Props {
-  rows: Schedule[];
-  snapshotAt: string | null;
-}
+type State = "idle" | "working" | "copied" | "downloaded" | "failed";
 
-type State = "idle" | "copied" | "downloaded" | "failed";
-
-export function ReportButton({ rows, snapshotAt }: Props) {
+export function ReportButton() {
   const [state, setState] = useState<State>("idle");
+  const [detail, setDetail] = useState<string | null>(null);
 
-  const flash = (s: State) => {
+  const flash = (s: State, d: string | null = null) => {
     setState(s);
-    setTimeout(() => setState("idle"), 2400);
+    setDetail(d);
+    setTimeout(() => {
+      setState("idle");
+      setDetail(null);
+    }, 3200);
   };
 
-  const build = () => {
+  const build = async (full: boolean) => {
+    const { rows, snapshotAt } = await fetchMarketSnapshot();
+    if (!rows.length) throw new Error("no sailings in the current window");
     const report = buildWeeklyReport(rows, { snapshotAt });
-    return { report, html: renderEmailHtml(report), text: renderEmailText(report) };
+    return { report, html: renderEmailHtml(report, full), text: renderEmailText(report) };
   };
 
   const download = (html: string, subject: string) => {
@@ -49,60 +53,72 @@ export function ReportButton({ rows, snapshotAt }: Props) {
     URL.revokeObjectURL(url);
   };
 
-  const onCopy = async () => {
-    const { report, html, text } = build();
+  const onGenerate = async () => {
+    setState("working");
     try {
-      if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
-        throw new Error("rich clipboard unavailable");
-      }
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          "text/html": new Blob([html], { type: "text/html" }),
-          "text/plain": new Blob([text], { type: "text/plain" }),
-        }),
-      ]);
-      flash("copied");
-    } catch {
-      // Not a dead end — give them the file instead, and say which happened.
+      const { report, html } = await build(true);
       download(html, report.subject);
-      flash("downloaded");
+      flash("downloaded", `${report.laneTables.length} lanes`);
+    } catch (e) {
+      flash("failed", (e as Error).message);
     }
   };
 
-  const onDownload = () => {
-    const { report, html } = build();
-    download(html, report.subject);
-    flash("downloaded");
+  const onCopy = async () => {
+    setState("working");
+    try {
+      const { report, html, text } = await build(false);
+      try {
+        if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+          throw new Error("rich clipboard unavailable");
+        }
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/html": new Blob([html], { type: "text/html" }),
+            "text/plain": new Blob([text], { type: "text/plain" }),
+          }),
+        ]);
+        flash("copied");
+      } catch {
+        // Not a dead end — give them the file instead, and say which happened.
+        download(html, report.subject);
+        flash("downloaded");
+      }
+    } catch (e) {
+      flash("failed", (e as Error).message);
+    }
   };
 
   const label =
-    state === "copied"
-      ? "copied — paste into Outlook"
+    state === "working"
+      ? "building…"
       : state === "downloaded"
-        ? "downloaded"
+        ? `downloaded${detail ? ` — ${detail}` : ""}`
         : state === "failed"
-          ? "could not copy"
-          : "Copy weekly report";
+          ? `could not build — ${detail ?? "unknown error"}`
+          : "Generate report";
+
+  const busy = state === "working";
 
   return (
     <span className="an-report">
       <button
         type="button"
         className="an-copy"
-        onClick={onCopy}
-        disabled={!rows.length}
-        title="Copies the whole-market report as formatted HTML. Paste into a new Outlook message — it lands in the body, not as an attachment."
+        onClick={onGenerate}
+        disabled={busy}
+        title="Downloads the whole-market point-to-point report as .html — every lane, every carrier, best to worst. Reads the market fresh, so it is independent of the search above."
       >
         {label}
       </button>
       <button
         type="button"
         className="an-copy an-copy--quiet"
-        onClick={onDownload}
-        disabled={!rows.length}
-        title="Save the report as an .html file, for archiving or attaching"
+        onClick={onCopy}
+        disabled={busy}
+        title="Copies a trimmed version as formatted HTML for pasting into an Outlook message body. Trimmed because Gmail clips a message near 102 KB."
       >
-        .html
+        {state === "copied" ? "copied — paste into Outlook" : "copy for email"}
       </button>
     </span>
   );

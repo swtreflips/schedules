@@ -1,4 +1,5 @@
-import type { BoardRow, WeeklyReport } from "./weeklyReport";
+import type { CarrierRow } from "../analytics/lane";
+import type { BoardRow, LaneTable, WeeklyReport } from "./weeklyReport";
 
 /**
  * Render the report as HTML that survives Outlook.
@@ -90,10 +91,130 @@ const headerRow = (showPol: boolean) =>
 const table = (inner: string) =>
   `<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;max-width:900px;font-family:${FONT};font-size:13px;color:${INK}">${inner}</table>`;
 
+// ── The carrier table, for the lanes where the choice is worth making ────────────────────────
+//
+// SIX COLUMNS, NOT FOURTEEN. The app's table scrolls sideways; an email does not, and Word wraps
+// what it cannot fit into an unreadable stack. These are the columns that decide who gets asked:
+// how much direct service there is, how much there is in total, which routings are worth quoting,
+// what they deliver, and how that compares to the lane.
+const SERVICES_SHOWN = 3;
+
+/**
+ * A routing, named against the lane it is on rather than in full.
+ *
+ * The heading above the table already says where the box is going, so repeating the destination on
+ * every line is noise — "via Taipei, Taiwan" beats "Taipei, Taiwan > Los Angeles/Long Beach, CA".
+ *
+ * THE FULL CHAIN SURVIVES WHEN THE DISCHARGE PORT IS NOT THE DESTINATION, because then it is not
+ * repetition: an inland Last CY reached through Oakland is a materially different routing from the
+ * same one through Houston, and that difference is the single biggest thing separating routings on
+ * a rail lane.
+ */
+function routingName(label: string, destination: string): string {
+  if (label === destination) return "direct";
+  const suffix = ` > ${destination}`;
+  return label.endsWith(suffix) ? `via ${label.slice(0, -suffix.length)}` : label;
+}
+
+/** A carrier's usable routings, stacked inside one cell. `<br>` is the only line break Word obeys. */
+function servicesCell(c: CarrierRow, destination: string): string {
+  const usable = c.services.filter((s) => s.usable);
+  const slower = c.services.length - usable.length;
+  const shown = usable.slice(0, SERVICES_SHOWN);
+  const more = usable.length - shown.length;
+
+  const lines = shown.map(
+    (s) =>
+      `${esc(routingName(s.label, destination))} <span style="color:${MUTED}">×${s.options}</span> ` +
+      `<strong>${num(s.median)}d</strong>`,
+  );
+
+  // Stated, not blank: an empty cell reads as missing data, where "nothing this carrier runs is
+  // within reach of the lane" is a finding worth putting in front of someone.
+  if (!lines.length) lines.push(`<span style="color:${FAINT}">no routing within +10%</span>`);
+  const tail: string[] = [];
+  if (more > 0) tail.push(`+${more} more usable`);
+  if (slower > 0) tail.push(`+${slower} slower`);
+  if (tail.length) lines.push(`<span style="color:${FAINT};font-size:11px">${tail.join(" · ")}</span>`);
+
+  return lines.join("<br>");
+}
+
+function carrierRow(c: CarrierRow, destination: string): string {
+  const vs =
+    c.vsLaneMedian == null
+      ? `<span style="color:${FAINT}">—</span>`
+      : c.vsLaneMedian < 0
+        ? `<strong style="color:${ACCENT}">${c.vsLaneMedian}d</strong>`
+        : c.vsLaneMedian > 0
+          ? `<span style="color:${MUTED}">+${c.vsLaneMedian}d</span>`
+          : `<span style="color:${FAINT}">0d</span>`;
+
+  const range =
+    c.transit.min == null || c.transit.max == null
+      ? ""
+      : ` <span style="color:${MUTED};font-size:11px">${c.transit.min}–${c.transit.max}</span>`;
+
+  return (
+    "<tr>" +
+    td(`<strong>${esc(c.carrier)}</strong>`) +
+    // Same honesty as the app: only the newest scrape per carrier and lane is kept, so no direct
+    // sailing in the snapshot is not the same claim as the carrier running none.
+    td(
+      c.directUnknown ? `<span style="color:${FAINT}">none</span>` : String(c.directOptions),
+      true,
+    ) +
+    td(String(c.options), true) +
+    td(servicesCell(c, destination)) +
+    td(`${num(c.transit.median)}${range}`, true) +
+    td(vs, true) +
+    "</tr>"
+  );
+}
+
+const carrierHeader =
+  "<tr>" +
+  th("Carrier") +
+  th("Direct", true) +
+  th("Options", true) +
+  th("Usable services") +
+  th("Median / range", true) +
+  th("vs lane", true) +
+  "</tr>";
+
+const carrierTable = (t: LaneTable) =>
+  table(carrierHeader + t.carriers.map((c) => carrierRow(c, t.destination)).join(""));
+
 const h2 = (text: string) =>
   `<p style="margin:22px 0 6px;font-family:${FONT};font-size:13px;font-weight:600;color:${INK};text-transform:uppercase;letter-spacing:0.06em;">${esc(text)}</p>`;
 
-export function renderEmailHtml(r: WeeklyReport): string {
+/**
+ * GMAIL CLIPS A MESSAGE NEAR 102 KB, and a clipped report is worse than a short one — the reader
+ * gets a "[Message clipped]" link where the legend should be, and no idea what is missing.
+ *
+ * The carrier tables are the section that can grow without bound, so they are the section that
+ * yields: everything else renders first, and they fill whatever room is left. A fixed cap on the
+ * number of lanes would not survive the market growing — measured today, the report is 67.5 KB
+ * before them and eight lanes take it to 108.9.
+ *
+ * The loop below never exceeds this number, so it is a hard ceiling rather than a target to drift
+ * past; 98 leaves four clear kilobytes under the clip.
+ */
+const SIZE_BUDGET = 98 * 1024;
+
+// UTF-8 bytes, not string length: the report is full of ×, →, · and en dashes, and the clip
+// threshold is measured in bytes.
+const bytes = (s: string) => new TextEncoder().encode(s).length;
+
+/**
+ * @param full  Bypass the size budget and render EVERY lane's carrier table.
+ *
+ * TWO OUTPUTS, ONE RENDERER. "Generate report" writes a file, where a reader scrolls and being
+ * complete is the point. "Copy" puts the report in an Outlook message body, where Gmail clips near
+ * 102 KB and an incomplete paste is a silent failure. Those are different constraints on the same
+ * document, not different documents — so the budget is a parameter rather than a fork.
+ */
+export function renderEmailHtml(r: WeeklyReport, full = false): string {
   const parts: string[] = [];
 
   parts.push(
@@ -117,25 +238,39 @@ export function renderEmailHtml(r: WeeklyReport): string {
     );
   }
 
+  // Everything BELOW the carrier tables is rendered first, so what is left of the budget is known
+  // before deciding how many of them fit. The document order is restored at the end.
+  const tail: string[] = [];
+
   for (const group of r.byPol) {
-    parts.push(
+    tail.push(
       h2(group.pol),
       table(headerRow(false) + group.rows.map((x) => row(x, false)).join("")),
     );
   }
 
+  // A LIST, NOT A TABLE. Every column on these rows says the same thing twice — the "best" carrier
+  // IS the only carrier, and the edge is zero by construction — so a full board spent 14 KB, as
+  // much as three carrier tables, restating "there is no decision here" seventeen times. The lanes
+  // are still all accounted for; they just do not get a grid to themselves.
   if (r.singleCarrier.length) {
-    parts.push(
+    tail.push(
       h2("Single-carrier lanes — no choice to make"),
-      `<p style="margin:0 0 8px;font-size:12px;color:${MUTED};">` +
-        `One carrier serves each of these, so there is no carrier decision — listed for coverage only.</p>`,
-      table(
-        headerRow(true) + r.singleCarrier.map((x) => row(x, true)).join(""),
-      ),
+      `<p style="margin:0 0 8px;font-size:12px;color:${MUTED};line-height:1.6;">` +
+        `One carrier serves each of these, so there is no carrier decision — listed for coverage ` +
+        `only.<br>` +
+        r.singleCarrier
+          .map(
+            (b) =>
+              `${esc(b.pol)} → ${esc(b.destination)}` +
+              (b.best ? ` <span style="color:${FAINT}">${esc(b.best.carrier)} ${b.best.median}d</span>` : ""),
+          )
+          .join(" · ") +
+        `</p>`,
     );
   }
 
-  parts.push(
+  tail.push(
     `<div style="margin-top:22px;padding:10px 12px;background:${PANEL};font-size:12px;color:${MUTED};line-height:1.5;">`,
     `<strong style="color:${INK};">Reading this</strong><br>` +
       `<strong>Options</strong> counts what a forwarder can be asked to quote: one routing, on one ` +
@@ -143,6 +278,12 @@ export function renderEmailHtml(r: WeeklyReport): string {
       `transship leaving the same day are two.<br>` +
       `<strong>Best (median)</strong> is the fastest carrier by median transit, not by its quickest ` +
       `single sailing.<br>` +
+      `<strong>Usable services</strong> lists every routing a carrier runs whose median lands within ` +
+      `10% of the lane median. A carrier is rarely one service, and a second acceptable routing is ` +
+      `not a faster transit — it is <em>another chance at space</em> at a transit that still works. ` +
+      `The lines are ordered by how often each routing runs, not how fast it is, so the top line is ` +
+      `what the carrier actually offers most and a lower line is sometimes the quicker one. ` +
+      `“+N slower” is what did not clear the margin.<br>` +
       `<strong>Edge</strong> is the lane median minus that best carrier: what picking the right ` +
       `carrier is worth, in days. A dash means every carrier performs alike and the choice is ` +
       `not worth arguing over.`,
@@ -153,6 +294,52 @@ export function renderEmailHtml(r: WeeklyReport): string {
     `</div>`,
   );
 
+  // THE SHORTLIST, LANE BY LANE — the section the report exists for. The board above says which
+  // lanes are worth a conversation; this says who to have it with, and it is the app's first table
+  // rather than a summary of it.
+  //
+  // Greedy, in attention order, so the lanes that survive a squeeze are the ones where the carrier
+  // choice is worth the most days.
+  const laneParts: string[] = [];
+  let shown = 0;
+  // The section's own heading and intro are charged up front (rounded up generously), or the last
+  // table admitted could be the one that pushes the message over.
+  const SECTION_CHROME = 400;
+  let spent = bytes(parts.join("")) + bytes(tail.join("")) + SECTION_CHROME;
+  for (const t of r.laneTables) {
+    const block =
+      `<p style="margin:18px 0 6px;font-size:13px;font-weight:600;color:${INK};">` +
+      `${esc(t.pol)} → ${esc(t.destination)}` +
+      (t.laneMedian != null
+        ? ` <span style="font-weight:400;color:${MUTED};">lane median ${t.laneMedian}d</span>`
+        : "") +
+      `</p>` +
+      carrierTable(t);
+    const cost = bytes(block);
+    if (!full && spent + cost > SIZE_BUDGET) break;
+    laneParts.push(block);
+    spent += cost;
+    shown += 1;
+  }
+
+  if (laneParts.length) {
+    const dropped = r.laneTables.length - shown;
+    parts.push(
+      h2("Who to ask, lane by lane"),
+      `<p style="margin:0 0 8px;font-size:12px;color:${MUTED};">` +
+        `The carrier ranking for each lane above — most direct sailings first, then the shallowest ` +
+        `transshipments.` +
+        // Said out loud. A section that silently stops short is the same failure as a clipped
+        // message, just quieter.
+        (dropped > 0
+          ? ` Showing the top ${shown} of ${r.laneTables.length}; the rest are in the app.`
+          : "") +
+        `</p>`,
+      ...laneParts,
+    );
+  }
+
+  parts.push(...tail);
   return parts.join("");
 }
 
@@ -170,6 +357,26 @@ export function renderEmailText(r: WeeklyReport): string {
       lines.push(
         `  ${a.pol} -> ${a.destination}: best ${num(a.best?.median)} (${a.best?.carrier ?? "—"}) ` +
           `vs lane ${num(a.laneMedian)} = ${a.edge}d`,
+      );
+    }
+    lines.push("");
+  }
+  for (const t of r.laneTables) {
+    lines.push(
+      `${t.pol.toUpperCase()} -> ${t.destination.toUpperCase()}` +
+        (t.laneMedian != null ? `  (lane median ${t.laneMedian}d)` : ""),
+    );
+    for (const c of t.carriers) {
+      const usable = c.services.filter((s) => s.usable);
+      const svc = usable.length
+        ? usable
+            .slice(0, SERVICES_SHOWN)
+            .map((s) => `${s.label} x${s.options} ${num(s.median)}d`)
+            .join(" | ")
+        : "no routing within +10%";
+      lines.push(
+        `  ${c.carrier}: ${c.directUnknown ? "no direct" : `${c.directOptions} direct`}, ` +
+          `${c.options} options, median ${num(c.transit.median)} — ${svc}`,
       );
     }
     lines.push("");

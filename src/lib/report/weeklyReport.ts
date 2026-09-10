@@ -1,5 +1,5 @@
 import type { Schedule } from "../../types/schedule";
-import { carrierStats, lanesIn } from "../analytics/lane";
+import { carrierStats, lanesIn, type CarrierRow } from "../analytics/lane";
 
 /**
  * The weekly report model — everything the email says, with no HTML in sight.
@@ -33,6 +33,21 @@ export interface BoardRow {
   edge: number | null;
 }
 
+/**
+ * A lane's full carrier ranking — the app's first table, carried into the email.
+ *
+ * The board says a lane is worth a conversation; this says who to have it with. It is the whole
+ * point of the report for the person reading it on a Monday, and it is deliberately limited to the
+ * `attention` lanes: a carrier table for all 54 lanes is roughly 7,000 cells, and Gmail clips a
+ * message near 102 KB.
+ */
+export interface LaneTable {
+  pol: string;
+  destination: string;
+  laneMedian: number | null;
+  carriers: CarrierRow[];
+}
+
 export interface WeeklyReport {
   subject: string;
   generatedOn: string;
@@ -40,6 +55,8 @@ export interface WeeklyReport {
   coverage: { carriers: number; lanes: number; sailings: number; pols: number };
   /** Lanes where carrier choice is worth the most days. The section that earns the open. */
   attention: BoardRow[];
+  /** One per `attention` lane, in the same order. */
+  laneTables: LaneTable[];
   /** Every lane with a real choice, grouped by port of loading. */
   byPol: Array<{ pol: string; rows: BoardRow[] }>;
   /** One carrier, no decision — kept for completeness, out of the way of the board. */
@@ -62,9 +79,15 @@ export function buildWeeklyReport(
   const lanes = lanesIn(rows);
 
   const board: BoardRow[] = [];
+  // Keyed so the attention lanes can be given their carrier table without a second `carrierStats`
+  // pass — the email must not be able to rank carriers differently from the screen.
+  const statsByLane = new Map<string, CarrierRow[]>();
+  const laneKey = (pol: string, destination: string) => `${pol}\u0000${destination}`;
+
   for (const lane of lanes) {
     const cs = carrierStats(rows, lane);
     if (!cs.length) continue;
+    statsByLane.set(laneKey(lane.pol, lane.lastCy), cs);
 
     const medians = cs
       .map((c) => c.transit.median)
@@ -123,6 +146,27 @@ export function buildWeeklyReport(
     .sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0))
     .slice(0, ATTENTION_MAX);
 
+  // EVERY LANE GETS ITS CARRIER TABLE, attention lanes first.
+  //
+  // This used to be the attention list alone, capped at eight, because the report existed to be
+  // pasted into Outlook and Gmail clips near 102 KB. That constraint did not disappear — it moved.
+  // The report is now generated as a FILE, where being complete matters more than being small, and
+  // the renderer keeps the byte budget only for the copy-to-clipboard path.
+  //
+  // Attention-first so the lanes where carrier choice is worth the most days are the ones you meet
+  // without scrolling; the rest follow in the board's own order, busiest first.
+  const attentionKeys = new Set(attention.map((b) => laneKey(b.pol, b.destination)));
+  const rest = withChoice
+    .filter((b) => !attentionKeys.has(laneKey(b.pol, b.destination)))
+    .sort((a, b) => b.options - a.options || a.pol.localeCompare(b.pol));
+
+  const laneTables: LaneTable[] = [...attention, ...rest].map((b) => ({
+    pol: b.pol,
+    destination: b.destination,
+    laneMedian: b.laneMedian,
+    carriers: statsByLane.get(laneKey(b.pol, b.destination)) ?? [],
+  }));
+
   return {
     subject: `Weekly Ocean Schedule Report — ${reportDate(today)}`,
     generatedOn: reportDate(today),
@@ -134,6 +178,7 @@ export function buildWeeklyReport(
       pols: new Set(board.map((b) => b.pol)).size,
     },
     attention,
+    laneTables,
     byPol,
     singleCarrier: singleCarrier.sort(
       (a, b) => a.pol.localeCompare(b.pol) || a.destination.localeCompare(b.destination),

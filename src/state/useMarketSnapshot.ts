@@ -1,15 +1,22 @@
-import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import type { Schedule } from "../types/schedule";
 
 /**
- * The current market, fetched once.
+ * The current market — fetched ON DEMAND, for the report only.
  *
- * Analytics does NOT reuse the grid's `rows`. That array is one lane, found by POL plus a radius
- * around a geocoded destination, so it can answer "which sailing" but not "what does this lane look
- * like compared with the rest". This reads the whole current-market view instead and derives every
- * table from it client-side, which also means the tables are projections of one array and cannot
- * disagree with each other.
+ * THIS USED TO RUN ON EVERY VISIT TO THE ANALYTICS TAB, and the comment here used to argue that
+ * Analytics must not reuse the grid's rows because that array "can answer which sailing but not
+ * what this lane looks like compared with the rest". That was right about the report and wrong
+ * about the screen.
+ *
+ * The screen's question is *"how does the market serve MY destination"* — a warehouse in
+ * Gainesville, FL, reached through Jacksonville by some carriers and Savannah by others. That is
+ * exactly what the search already returns, so Analytics now reads the search like Plan and Rank do.
+ *
+ * The whole market is still what the REPORT needs, because a point-to-point comparison wants every
+ * lane rather than one destination's worth. So this stayed — as a function, called when the report
+ * button is pressed, rather than a hook firing on mount. Opening the tab no longer pages the entire
+ * schedules view.
  *
  * Narrow column list on purpose: `raw_schedule`, `route_metadata` and the three geometry columns
  * dominate the payload and nothing here needs them.
@@ -37,76 +44,43 @@ const COLUMNS = [
   "query_date",
 ].join(",");
 
-interface MarketSnapshot {
+export interface MarketSnapshot {
   rows: Schedule[];
   /** Newest `query_date` in the snapshot — how current the whole picture is. */
   snapshotAt: string | null;
   /** Per carrier, when that carrier was last scraped. A carrier missing here is not in the window. */
   scrapedByCarrier: Map<string, string>;
-  loading: boolean;
-  error: string | null;
 }
 
-export function useMarketSnapshot(): MarketSnapshot {
-  const [rows, setRows] = useState<Schedule[]>([]);
-  const [snapshotAt, setSnapshotAt] = useState<string | null>(null);
-  const [scrapedByCarrier, setScraped] = useState<Map<string, string>>(new Map());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+/** Throws on failure — the caller has a button to put into an error state. */
+export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
+  // PostgREST caps a response, and the market view is larger than that cap; page rather than
+  // silently analysing the first slice of it.
+  const PAGE = 1000;
+  const all: Array<Schedule & { query_date?: string }> = [];
+  let start = 0;
 
-  useEffect(() => {
-    let cancelled = false;
+  for (;;) {
+    const { data, error } = await supabase
+      .from("schedules_latest_secure")
+      .select(COLUMNS)
+      .range(start, start + PAGE - 1);
+    if (error) throw new Error(error.message);
+    const batch = (data ?? []) as unknown as Array<Schedule & { query_date?: string }>;
+    all.push(...batch);
+    if (batch.length < PAGE) break;
+    start += PAGE;
+  }
 
-    async function load() {
-      // PostgREST caps a response, and the market view is larger than that cap; page rather than
-      // silently analysing the first slice of it.
-      const PAGE = 1000;
-      const all: Array<Schedule & { query_date?: string }> = [];
-      let start = 0;
+  const scrapedByCarrier = new Map<string, string>();
+  let snapshotAt: string | null = null;
+  for (const r of all) {
+    const q = r.query_date ?? null;
+    if (!q) continue;
+    if (!snapshotAt || q > snapshotAt) snapshotAt = q;
+    const prev = scrapedByCarrier.get(r.carrier_code);
+    if (!prev || q > prev) scrapedByCarrier.set(r.carrier_code, q);
+  }
 
-      try {
-        for (;;) {
-          const { data, error: err } = await supabase
-            .from("schedules_latest_secure")
-            .select(COLUMNS)
-            .range(start, start + PAGE - 1);
-          if (err) throw new Error(err.message);
-          const batch = (data ?? []) as unknown as Array<Schedule & { query_date?: string }>;
-          all.push(...batch);
-          if (batch.length < PAGE) break;
-          start += PAGE;
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
-          setLoading(false);
-        }
-        return;
-      }
-
-      if (cancelled) return;
-
-      const scraped = new Map<string, string>();
-      let newest: string | null = null;
-      for (const r of all) {
-        const q = r.query_date ?? null;
-        if (!q) continue;
-        if (!newest || q > newest) newest = q;
-        const prev = scraped.get(r.carrier_code);
-        if (!prev || q > prev) scraped.set(r.carrier_code, q);
-      }
-
-      setRows(all as Schedule[]);
-      setSnapshotAt(newest);
-      setScraped(scraped);
-      setLoading(false);
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { rows, snapshotAt, scrapedByCarrier, loading, error };
+  return { rows: all as Schedule[], snapshotAt, scrapedByCarrier };
 }
