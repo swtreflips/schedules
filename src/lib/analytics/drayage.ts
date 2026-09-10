@@ -15,6 +15,15 @@ export interface Dray {
   hours: number;
   /** Banded — see `drayDays`. */
   days: number;
+  /**
+   * The place actually measured from.
+   *
+   * NOT ALWAYS THE NAME THIS IS FILED UNDER. A port complex is one Last CY to the analytics — `Los
+   * Angeles/Long Beach, CA` — and that is a name no router can be asked about with any confidence,
+   * because it is a label this codebase invented. So the legs are measured from the real berths and
+   * folded, and this says which one the figure came from.
+   */
+  from?: string;
 }
 
 /**
@@ -54,13 +63,32 @@ export function drayDays(miles: number): number {
 }
 
 /** Build a `Dray` from what `route-batch` returns. */
-export function toDray(distanceMeters: number, durationSeconds: number): Dray {
+export function toDray(distanceMeters: number, durationSeconds: number, from?: string): Dray {
   const miles = distanceMeters / 1609.34;
   return {
     miles: Math.round(miles),
     hours: Math.round((durationSeconds / 3600) * 10) / 10,
     days: drayDays(miles),
+    from,
   };
+}
+
+/**
+ * Fold several berths of one port complex into the single leg the analytics asks for.
+ *
+ * THE SHORTEST, because that is what the fold already asserts. `ports.ts` collapses Los Angeles and
+ * Long Beach into one Last CY on the grounds that they are commercially the same delivery — "a
+ * truck move across one bay" — so a shipper treating them as interchangeable would pull from
+ * whichever is closer. Measured against a Simi Valley warehouse the two are 63 and 64 miles, which
+ * is the shape of the difference the fold is claiming to be immaterial.
+ *
+ * `from` carries whichever berth won, so the row can say what it measured rather than implying the
+ * complex itself has a distance.
+ */
+export function foldDray(legs: Dray[]): Dray | undefined {
+  const known = legs.filter(Boolean);
+  if (!known.length) return undefined;
+  return known.reduce((best, d) => (d.miles < best.miles ? d : best));
 }
 
 /**

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { routeBatch } from "../lib/geoapi";
-import { toDray, type Dray } from "../lib/analytics/drayage";
+import { foldDray, toDray, type Dray } from "../lib/analytics/drayage";
+import { canonicalPort } from "../lib/analytics/ports";
 
 /**
  * Road distance from every Last CY in the current result set to the customer's door.
@@ -24,8 +25,20 @@ const cache = new Map<string, Dray | null>();
 const cacheKey = (lastCy: string, destination: string) => lastCy + SEP + destination;
 
 export interface DrayageState {
-  /** Last CY -> its ground leg. Absent means unknown, and the UI must render that as "—". */
+  /**
+   * CANONICAL Last CY -> its ground leg. Absent means unknown, and the UI must render that as "—".
+   *
+   * ⚠ KEYED THE WAY AN `Option` IS, NOT THE WAY THE ROWS ARE. This map is read with
+   * `dray.get(option.lastCy)`, and `Option.lastCy` is `canonicalPort(last_cy)`. Filing legs under
+   * the raw names instead meant every port COMPLEX missed: rows carrying `Los Angeles, CA` and
+   * `Long Beach, CA` produced options carrying `Los Angeles/Long Beach, CA`, so the lookup found
+   * nothing and the whole column read "—" for the busiest destination in the dataset. The routing
+   * still has to happen on the raw names — the folded one is a label this codebase invented, not a
+   * place — so the legs are measured per berth and folded on the way in.
+   */
   dray: Map<string, Dray>;
+  /** Distinct canonical Last CYs asked about — what `dray.size` should be compared against. */
+  requested: number;
   loading: boolean;
   error: string | null;
 }
@@ -60,11 +73,12 @@ export function useDrayage(lastCys: string[], destination: string): DrayageState
 
     routeBatch(missing.map((cy) => ({ a: cy, b: destination })))
       .then((legs) => {
-        // Index-aligned by contract, so position is the join.
+        // Index-aligned by contract, so position is the join. Cached under the RAW berth, because
+        // that is what was actually measured and what must not be re-measured.
         legs.forEach((leg, i) => {
           cache.set(
             cacheKey(missing[i], destination),
-            leg.ok ? toDray(leg.distance_m, leg.duration_s) : null,
+            leg.ok ? toDray(leg.distance_m, leg.duration_s, missing[i]) : null,
           );
         });
         if (!cancelled) {
@@ -84,11 +98,22 @@ export function useDrayage(lastCys: string[], destination: string): DrayageState
     };
   }, [signature, destination]);
 
-  const dray = new Map<string, Dray>();
+  // Fold the measured berths onto the canonical name the options are keyed by. For an ordinary port
+  // `canonicalPort` is the identity, so this is a straight copy; for a complex it collapses the two
+  // berths into the one Last CY the analytics reasons about.
+  const byCanonical = new Map<string, Dray[]>();
   for (const cy of new Set(lastCys)) {
+    const key = canonicalPort(cy);
     const hit = cache.get(cacheKey(cy, destination));
-    if (hit) dray.set(cy, hit);
+    if (!byCanonical.has(key)) byCanonical.set(key, []);
+    if (hit) byCanonical.get(key)!.push(hit);
   }
 
-  return { dray, loading, error };
+  const dray = new Map<string, Dray>();
+  for (const [key, legs] of byCanonical) {
+    const folded = foldDray(legs);
+    if (folded) dray.set(key, folded);
+  }
+
+  return { dray, requested: byCanonical.size, loading, error };
 }

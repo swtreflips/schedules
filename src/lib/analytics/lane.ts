@@ -203,17 +203,13 @@ export interface CarrierRow {
   /** Days between first and last sailing. A high count inside a short window is not coverage. */
   windowDays: number;
   corridors: number;
-  /** Ocean transit across every option this carrier offers. */
-  transit: Spread;
   /**
-   * Ocean PLUS the ground leg, per option, aggregated the same way. DESTINATION MODE ONLY.
+   * Ocean transit across every option this carrier offers — and THE figure the table is judged on.
    *
-   * Computed per option rather than per carrier, because a carrier's options can land in different
-   * places: WHL into Savannah and into Jacksonville for one Gainesville warehouse carry different
-   * ground legs, and averaging the carrier's ocean transit first would attach one dray to a figure
-   * that already mixed both.
+   * There was briefly a `door` spread beside this, ocean plus a banded drayage, and the ranking ran
+   * on that. It is gone: drayage is not the carrier's leg, so it does not measure the carrier.
    */
-  door?: Spread;
+  transit: Spread;
   /** Every Last CY this carrier reaches, in destination mode. One entry in lane mode. */
   lastCys: string[];
   pods: string[];
@@ -298,12 +294,17 @@ export function carrierStats(
   rows: Schedule[],
   lane?: Lane,
   /**
-   * Last CY -> its ground leg. PRESENT SWITCHES THIS INTO DESTINATION MODE.
+   * Canonical Last CY -> its ground leg, for DISPLAY ONLY.
    *
-   * Absent, every benchmark and the sort behave exactly as they did before — which is what keeps
-   * the report strictly point-to-point while the app answers for a door. Passing it changes three
-   * things and only three: services carry a door median, the usable test measures door transit, and
-   * the sort's speed key is door rather than ocean.
+   * ⚠ PASSING THIS CHANGES NO NUMBER THE TABLE IS RANKED BY. It attaches `dray` and `doorMedian` to
+   * each service so the view can show what is left to solve once the carrier is done, and that is
+   * all. The ordering, `vs lane` and the usable test are identical with it and without it — there
+   * is a check pinning exactly that, because the previous version did let it into the ranking and
+   * the coupling was invisible until a destination failed to resolve and blanked the table.
+   *
+   * Keyed on the CANONICAL name because that is what `Option.lastCy` carries. Keyed on the raw
+   * value, every port complex missed: `Los Angeles, CA` rows produce `Los Angeles/Long Beach, CA`
+   * options.
    */
   dray?: Map<string, Dray>,
 ): CarrierRow[] {
@@ -390,9 +391,6 @@ export function carrierStats(
       windowDays: dates.length > 1 ? daysBetween(dates[0], dates[dates.length - 1]) : 0,
       corridors: byRoute.size,
       transit: spreadOf(group.map((o) => o.transit)),
-      door: dray
-        ? spreadOf(group.map((o) => doorTransit(o.transit, dray.get(o.lastCy))))
-        : undefined,
       lastCys: [...new Set(group.map((o) => o.lastCy))].sort(),
       pods: [...new Set(group.map((o) => o.pod))].sort(),
       nextEtd: dates[0] ?? null,
@@ -407,28 +405,22 @@ export function carrierStats(
     });
   }
 
-  // THE FIGURE EVERYTHING IS JUDGED ON: door transit when the ground leg is known, ocean otherwise.
+  // THE RANKING IS OCEAN TRANSIT, ALWAYS. Drayage never enters it.
   //
-  // This is the whole of the destination-mode change. Scoped to a POL -> Last CY lane every carrier
-  // ends in the same place, so ocean transit is a fair comparison and door would be ocean plus a
-  // constant. Scoped to a DESTINATION they end in different places — Jacksonville is 84 road miles
-  // from a Gainesville warehouse and Savannah is 210 — and comparing ocean legs then measures
-  // different journeys. The same objection the file already raises against comparing on POD.
-  const speed = (d: Draft) => (dray ? (d.door?.median ?? null) : d.transit.median);
-  const serviceSpeed = (s: Service) => (dray ? (s.doorMedian ?? null) : s.median);
-
-  /**
-   * The shortest ground leg this carrier can put the box on, in road miles.
-   *
-   * The SHORTEST rather than the main service's, because it is the best ground outcome the carrier
-   * can actually offer — if a carrier reaches both Jacksonville and Savannah for a Gainesville
-   * warehouse, the Jacksonville option is the one that decides what its drayage costs. Only usable
-   * services count: a cheap dray off a routing nobody would book is not an advantage.
-   */
-  const drayMilesOf = (d: Draft) => {
-    const legs = d.services.filter((s) => s.usable && s.dray).map((s) => s.dray!.miles);
-    return legs.length ? Math.min(...legs) : LAST;
-  };
+  // It used to: with a ground leg known, `vs lane`, the usable test and the sort all ran on ocean
+  // plus a banded drayage. That was defensible — the routings end in different places, so ocean
+  // legs alone measure different journeys — and it was still wrong for this table.
+  //
+  // DRAYAGE IS CONTEXT, NOT COMPARISON. It says what is left to solve once the carrier has finished:
+  // a cost and a piece of planning, on a leg the shipper arranges. Folding it into the transit
+  // comparison mixed something a carrier is answerable for with something it is not, and it dragged
+  // a working column down with it — a destination whose legs failed to resolve blanked `vs lane`
+  // for the entire table, because there was no door figure left to compare.
+  //
+  // So the two live side by side and neither contaminates the other: ocean transit is the carrier's
+  // performance, drayage distance is the ground you are left with, and the reader weighs them.
+  const speed = (d: Draft) => d.transit.median;
+  const serviceSpeed = (s: Service) => s.median;
 
   // The lane's own median carrier is the benchmark, not an absolute day count: 30 days is good on
   // one lane and poor on another, and the team is choosing between these carriers, not all lanes.
@@ -540,16 +532,13 @@ export function carrierStats(
         // It sits below the thin guard on purpose — depth is a reason to prefer a carrier, not a
         // reason to promote one whose service is too small to rely on.
         b.usableServices - a.usableServices ||
-        // DOOR TRANSIT IN DESTINATION MODE, ocean in lane mode. `speed` is the only difference.
+        // OCEAN TRANSIT. Drayage is not a tiebreak either — it is not the carrier's leg, so it does
+        // not order carriers.
         //
         // LAST rather than Infinity for the null case: two carriers that both published no transit
         // would make `Infinity - Infinity` NaN, and a comparator returning NaN leaves the order
         // undefined rather than tied. Reachable — a carrier can publish departures with no arrival.
         (speed(a) ?? LAST) - (speed(b) ?? LAST) ||
-        // Then the shorter ground leg. Two carriers at the same door transit are not the same
-        // proposition if one drays 84 miles and the other 210 — the days band equal while the cost
-        // does not, and that is the whole reason the miles stay on the row.
-        drayMilesOf(a) - drayMilesOf(b) ||
         b.options - a.options ||
         a.carrier.localeCompare(b.carrier),
     );

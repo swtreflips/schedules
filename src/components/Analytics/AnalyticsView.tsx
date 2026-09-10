@@ -5,7 +5,6 @@ import {
   type CarrierRow,
   type Lane,
 } from "../../lib/analytics/lane";
-import { LOCAL_DRAY_MILES, REGIONAL_DRAY_MILES } from "../../lib/analytics/drayage";
 import { laneVerdict } from "../../lib/analytics/rfq";
 import { useDrayage } from "../../state/useDrayage";
 import { ReportButton } from "./ReportButton";
@@ -27,10 +26,11 @@ import type { Schedule } from "../../types/schedule";
  * So this reads the SEARCH, exactly as Plan and Rank do — `nearby_schedules` already returns every
  * Last CY inside the radius — and the Last CY becomes part of the routing rather than the frame.
  *
- * WHICH MEANS THE COMPARISON NEEDS THE GROUND LEG. Once the routings end in different places, ocean
- * transit alone compares different journeys: Jacksonville is 84 road miles from that warehouse and
- * Savannah is 210. Ranking is on DOOR transit, and the miles stay on the row because they are what
- * the ground move costs.
+ * THE GROUND LEG IS SHOWN, NOT SCORED. Once the routings end in different places the reader needs to
+ * know what is left to solve — Jacksonville is 84 road miles from that warehouse and Savannah is
+ * 210, and that is a real cost. But it is a leg the shipper arranges, not one the carrier is
+ * answerable for, so it sits in its own column and touches nothing else. Ranking, `vs lane` and the
+ * usable test are all ocean transit.
  *
  * The strict port-pair comparison did not go away — it moved behind "Generate report", where every
  * carrier ends in the same place and no drayage needs telling apart.
@@ -248,7 +248,12 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
     () => [...new Set(rows.map((r) => r.last_cy).filter(Boolean))],
     [rows],
   );
-  const { dray, loading: drayLoading, error: drayError } = useDrayage(lastCys, destination);
+  const {
+    dray,
+    requested: drayRequested,
+    loading: drayLoading,
+    error: drayError,
+  } = useDrayage(lastCys, destination);
 
   // Freshness comes from the rows on screen rather than a separate market read: these ARE the rows
   // being analysed, so the date beside a carrier is the date of the data in front of you.
@@ -266,12 +271,8 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
   // NO LANE ARGUMENT. `inLane(rows, undefined)` returns the rows untouched, so the statistics run
   // over the whole search — every Last CY within the radius — rather than one port pair.
   //
-  // AN EMPTY MAP MUST NOT ENGAGE DESTINATION MODE. It is truthy, so passing it turned every door
-  // median null, which blanked `vs lane` for the entire table AND — because a null benchmark
-  // disqualifies nothing — marked every routing usable, including ones twenty days out of reach.
-  // That was the state for the ~8 seconds the router takes on a cold destination, and permanently
-  // whenever it failed. With no legs resolved there is nothing to add to the ocean leg, so the
-  // honest fallback is the ocean ranking, which is exactly what the report already does.
+  // The dray map is display-only — `carrierStats` ranks on ocean transit whether it is passed or
+  // not — so an empty one is harmless now. Still skipped when nothing resolved, to save the work.
   const carriers = useMemo(
     () => carrierStats(rows, undefined, dray.size ? dray : undefined),
     [rows, dray],
@@ -319,17 +320,10 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
         {drayLoading && <span className="an-meta an-dim">measuring drayage…</span>}
         {/* Both of these are now true statements rather than hopeful ones: with no legs resolved the
             table really does fall back to the ocean ranking. */}
-        {!drayLoading && !dray.size && lastCys.length > 0 && (
+        {!drayLoading && drayRequested > 0 && dray.size < drayRequested && (
           <span className="an-meta an-slow" title={drayError ?? undefined}>
-            drayage unavailable — ranked on ocean transit only
-          </span>
-        )}
-        {!drayLoading && dray.size > 0 && dray.size < lastCys.length && (
-          <span
-            className="an-meta an-slow"
-            title={lastCys.filter((cy) => !dray.has(cy)).join("\n")}
-          >
-            {lastCys.length - dray.size} of {lastCys.length} discharge points have no road distance
+            {drayRequested - dray.size} of {drayRequested} discharge point
+            {drayRequested === 1 ? "" : "s"} have no road distance
           </span>
         )}
         <ReportButton />
@@ -440,14 +434,13 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
             carrier has one service.
             <strong> Drayage distance</strong> is measured from where the carrier hands the box over
             — the Last CY, which is not always the discharge port, so a routing reading{" "}
-            <em>Savannah → Tampa</em> is drayed from Tampa. <strong>The table is ranked on ocean plus
-            that ground leg</strong>, not on ocean alone: your carriers do not all end in the same
-            place, so comparing sailings alone compares different journeys. A leg up to{" "}
-            {LOCAL_DRAY_MILES} miles counts as a day, up to {REGIONAL_DRAY_MILES} as two, beyond
-            that as three — past local range a dray stops being a same-day turn.{" "}
-            <strong>vs lane</strong> is that combined figure against the lane's median carrier, so
-            it is where the ranking shows its working. The bands are a judgement about how the move
-            runs; the miles are the measurement, and they are what the ground leg <em>costs</em>.
+            <em>Savannah → Tampa</em> is drayed from Tampa, and a folded complex like{" "}
+            <em>Los Angeles/Long Beach</em> is measured from whichever berth is nearer.{" "}
+            <strong>It is context, not comparison.</strong> It says what is left to solve once the
+            carrier has finished — a cost and a piece of planning on a leg you arrange — so it plays
+            no part in the ranking, in <strong>vs lane</strong>, or in which routings count as
+            usable. Those are all ocean transit, which is what the carrier is answerable for.
+            Weigh the two yourself: a day of sailing can be worth several hundred ground miles.
             <strong> Spread</strong> is what the median hides: the most-served carrier on a lane is
             often the least predictable, and a 27-day spread means the transit you were quoted is
             not the one you can count on. <strong>Sailing window</strong> separates a service that

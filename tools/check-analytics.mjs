@@ -197,36 +197,44 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   check("a carrier with nothing in reach reads zero", [slow.usableServices, slow.usableOptions], [0, 0]);
 }
 
-// WHAT AN EMPTY DRAYAGE MAP DOES — and why the caller must not pass one.
+// ── DRAYAGE IS CONTEXT, NOT COMPARISON ───────────────────────────────────────────────
 //
-// A Map with no entries is truthy, so handing it over engages destination mode with nothing in it:
-// every door median goes null, which blanks `vs lane` for the whole table AND marks every routing
-// usable, because a null benchmark disqualifies nothing. That was the state for the seconds the
-// router takes on a cold destination, and permanently whenever it failed.
+// THE CENTRAL GUARANTEE: passing a dray map changes no number the table is ranked by. Drayage is a
+// leg the SHIPPER arranges — a cost and a piece of planning left over once the carrier is done — so
+// it says what remains to solve and takes no part in judging the carrier.
 //
-// The behaviour below is correct for the argument given — there is genuinely nothing to compare —
-// so the fix belongs at the call site, which passes `undefined` when nothing resolved. Both halves
-// are pinned here so neither can drift.
+// It used to. `vs lane`, the usable test and the sort all ran on ocean plus a banded drayage, and
+// the coupling was invisible until a destination's legs failed to resolve: with no door figure to
+// compare, `vs lane` blanked for the entire table and every routing was marked usable, including
+// ones twenty days out of reach. A column that can take the rest of the table down with it is doing
+// more than its job.
 {
   const rows = [
     ...svcTo("A", 6, 20, "Jacksonville, FL"),
     ...svcTo("B", 6, 30, "Jacksonville, FL", ["H"], "POD", 2),
     ...svcTo("C", 6, 40, "Savannah, GA", ["H"], "POD", 3),
   ];
+  const legs = new Map([
+    ["Jacksonville, FL", { miles: 84, hours: 1.6, days: 1 }],
+    // Long enough to have flipped the old ranking outright.
+    ["Savannah, GA", { miles: 900, hours: 13, days: 3 }],
+  ]);
+
+  const bare = carrierStats(rows, undefined);
+  const withLegs = carrierStats(rows, undefined, legs);
   const empty = carrierStats(rows, undefined, new Map());
-  check("an empty dray map blanks every vs-lane", empty.map((c) => c.vsLaneMedian), [null, null, null]);
-  check("...and marks even a hopeless routing usable", empty.find((c) => c.carrier === "C").usableServices, 1);
-
-  // Which is why the view passes undefined instead, giving the ocean ranking the report uses.
-  const ocean = carrierStats(rows, undefined, undefined);
-  check("no map at all ranks on ocean, with real numbers", ocean.map((c) => c.vsLaneMedian), [-10, 0, 10]);
-  check("...and disqualifies the hopeless routing again", ocean.find((c) => c.carrier === "C").usableServices, 0);
-
-  // A PARTIAL MAP IS DIFFERENT, and its dash is honest: that carrier's ground leg is unknown, so it
-  // has no door transit to compare. Nothing to fall back to — the other carriers do have legs.
   const partial = carrierStats(rows, undefined, new Map([["Jacksonville, FL", { miles: 84, hours: 1.6, days: 1 }]]));
-  check("an unresolved leg dashes only that carrier", partial.find((c) => c.carrier === "C").vsLaneMedian, null);
-  check("...while the resolved ones still compare", partial.find((c) => c.carrier === "A").vsLaneMedian, -5);
+
+  const shape = (cs) => cs.map((c) => [c.carrier, c.vsLaneMedian, c.usableServices]);
+  check("the ranking is the same with a dray map as without", shape(withLegs), shape(bare));
+  check("...with an empty one", shape(empty), shape(bare));
+  check("...and with a partial one", shape(partial), shape(bare));
+  check("...and those are real figures, not blanks", shape(bare), [["A", -10, 1], ["B", 0, 1], ["C", 10, 0]]);
+
+  // What the map DOES do: hang a ground leg on each routing for the column to show.
+  check("the map attaches a leg to the routing", withLegs.find((c) => c.carrier === "C").services[0].dray.miles, 900);
+  check("...and none when it was not measured", partial.find((c) => c.carrier === "C").services[0].dray, undefined);
+  check("...while still naming the routing", partial.find((c) => c.carrier === "C").services[0].lastCy, "Savannah, GA");
 }
 
 // A LANE WITH NO PUBLISHED TRANSIT HAS NO BENCHMARK, so nothing is disqualified. Zeroing every
@@ -554,19 +562,20 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   check("...and neither does an unresolved ground leg", doorTransit(26, undefined), null);
 }
 
-// THE CASE THE WHOLE CHANGE EXISTS FOR.
+// ── THE GROUND LEG IS SHOWN, NEVER SCORED ────────────────────────────────────────────
 //
-// Savannah is two days' faster on the water and two days' worse on the ground. Ranked on ocean
-// transit the Savannah carrier wins; ranked door to door they tie at 28 and the shorter dray
-// breaks it. Shaped from the measured numbers: Jacksonville 84 mi, Savannah 210 mi.
+// Savannah is a day faster on the water and 126 road miles worse on the ground. Under the previous
+// contract those cancelled: banded to days they tied at 28 and the shorter dray broke it, so JAX
+// led. Drayage no longer touches the ranking, so SAV leads on its ocean leg and the miles sit
+// beside it for the reader to weigh — a day of sailing against a couple of hours of trucking.
+//
+// Numbers are the ones the live router returned for a Gainesville, FL warehouse, built through
+// `toDray` so the banding is wired in rather than asserted by hand.
 {
   const rows = [
     ...svcTo("SAV", 6, 26, "Savannah, GA", ["H"]),
     ...svcTo("JAX", 6, 27, "Jacksonville, FL", ["H"], "POD", 2),
   ];
-  // BUILT THROUGH `toDray`, from the numbers the live router actually returned for these two, so
-  // the banding is wired in rather than asserted by hand. A hand-built `{ days: 2 }` would keep
-  // this test passing even if the banding were flattened to nothing.
   const dray = new Map([
     ["Savannah, GA", toDray(210 * 1609.34, 3.3 * 3600)],
     ["Jacksonville, FL", toDray(84 * 1609.34, 1.6 * 3600)],
@@ -574,23 +583,19 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   check("the router's metres and seconds band correctly", [dray.get("Savannah, GA").miles, dray.get("Savannah, GA").days], [210, 2]);
   check("...and the short one to a single day", [dray.get("Jacksonville, FL").miles, dray.get("Jacksonville, FL").days], [84, 1]);
 
-  const ocean = carrierStats(rows).map((c) => c.carrier);
-  check("on ocean transit alone the Savannah carrier leads", ocean, ["SAV", "JAX"]);
-
-  const door = carrierStats(rows, undefined, dray);
-  check("door to door they tie at 28 days", door.map((c) => c.door.median), [28, 28]);
-  check("...and the shorter ground leg wins", door.map((c) => c.carrier), ["JAX", "SAV"]);
-  check("...ocean transit is still reported unchanged", door.map((c) => c.transit.median), [27, 26]);
-  check("...and each service carries its own dray", door.map((c) => c.services[0].dray.miles), [84, 210]);
+  const withLegs = carrierStats(rows, undefined, dray);
+  check("the faster sailing leads, ground leg notwithstanding", withLegs.map((c) => c.carrier), ["SAV", "JAX"]);
+  check("...identically to having no dray map at all", withLegs.map((c) => c.carrier), carrierStats(rows).map((c) => c.carrier));
+  check("...ocean transit is what is reported", withLegs.map((c) => c.transit.median), [26, 27]);
+  check("...and each routing carries its own miles", withLegs.map((c) => c.services[0].dray.miles), [210, 84]);
 }
 
-// WHEN THE GROUND LEG DISQUALIFIES A ROUTING — and when it cannot.
+// A GROUND LEG LONG ENOUGH TO DOMINATE THE JOURNEY STILL DOES NOT MOVE THE TABLE.
 //
-// The usable margin is 10% of the lane median and the banding spans 1-3 days, so drayage can only
-// push a routing out of reach when 2 days is more than a tenth of the lane: SHORT lanes. On a
-// 30-day trans-Pacific it never will, and claiming otherwise would be inventing a discrimination
-// the numbers do not support. Isolated here by giving both carriers the SAME ocean transit, so the
-// ground leg is the only thing that differs.
+// Five carriers on identical 9-day sailings, one of them landing 900 miles from the door. Under the
+// previous contract that was disqualifying — the banded three days blew past a 10% margin on a
+// short lane — and it dropped to last. Now every carrier is equal on the water, so the table says
+// so, and the 900 miles is the reader's to price.
 {
   const rows = [
     ...svcTo("A", 4, 9, "Nearby, FL", ["H"]),
@@ -605,30 +610,13 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   ]);
   const cs = carrierStats(rows, undefined, dray);
   const far = cs.find((c) => c.carrier === "FAR");
-  check("identical ocean transit, so ocean alone cannot separate them", far.transit.median, 9);
-  check("...but the long ground leg puts it out of reach", far.usableServices, 0);
-  check("...while the short one stays usable", cs.find((c) => c.carrier === "A").usableServices, 1);
-  check("...and it ranks last", cs[cs.length - 1].carrier, "FAR");
+  check("the distant carrier sails as well as the rest", far.transit.median, 9);
+  check("...so its routing stays usable", far.usableServices, 1);
+  check("...and vs lane is untouched by 900 ground miles", far.vsLaneMedian, 0);
+  check("...with the miles on the row to weigh", far.services[0].dray.miles, 900);
 }
 
-// The same shape on a LONG lane, where it correctly does NOT disqualify. Two days is inside 10% of
-// a 30-day median, so the ground leg shows up in the ordering and the miles, not in usability.
-{
-  const rows = [
-    ...svcTo("NEAR", 4, 30, "Jacksonville, FL", ["H"]),
-    ...svcTo("FAR", 4, 30, "Far, TX", ["H"], "POD", 5),
-  ];
-  const dray = new Map([
-    ["Jacksonville, FL", { miles: 84, hours: 1.6, days: 1 }],
-    ["Far, TX", { miles: 900, hours: 13, days: 3 }],
-  ]);
-  const cs = carrierStats(rows, undefined, dray);
-  check("on a 30-day lane a 2-day dray gap is inside the margin", cs.find((c) => c.carrier === "FAR").usableServices, 1);
-  check("...so it still ranks behind, on door transit", cs.map((c) => c.carrier), ["NEAR", "FAR"]);
-  check("...by exactly the banding", cs.map((c) => c.door.median), [31, 33]);
-}
-
-// An unresolved ground leg must not read as a short one.
+// An unresolved ground leg costs the carrier nothing, because it was never being judged on it.
 {
   const rows = [
     ...svcTo("KNOWN", 6, 30, "Jacksonville, FL", ["H"]),
@@ -637,9 +625,10 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   const dray = new Map([["Jacksonville, FL", { miles: 84, hours: 1.6, days: 1 }]]);
   const cs = carrierStats(rows, undefined, dray);
   const unk = cs.find((c) => c.carrier === "UNKNOWN");
-  check("an unresolved ground leg yields no door transit", unk.door.median, null);
-  check("...so the routing is not offered as usable", unk.usableServices, 0);
-  check("...and the resolved carrier ranks ahead of it", cs[0].carrier, "KNOWN");
+  check("the faster sailing leads even with no ground leg measured", cs[0].carrier, "UNKNOWN");
+  check("...its routing is usable on the water", unk.usableServices, 1);
+  check("...vs lane is a real figure, not a dash", unk.vsLaneMedian, -2.5);
+  check("...and only the miles are missing", unk.services[0].dray, undefined);
 }
 
 console.log(failed ? `\n${failed} failure(s)` : "\nall checks passed");
