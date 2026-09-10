@@ -159,6 +159,13 @@ export interface Service {
    * destination mode, where one carrier may run one to Jacksonville and another to Savannah.
    */
   lastCy: string;
+  /**
+   * The carrier moves the box inland after discharging — `discharge` and `lastCy` are different
+   * places. False when the box comes off the ship where the carrier hands it over.
+   *
+   * NOT A QUALITY JUDGEMENT, A PRIORITY ONE. See the service sort.
+   */
+  railLeg: boolean;
   /** The ground leg from `lastCy` to the customer's door. Only in destination mode. */
   dray?: Dray;
   /**
@@ -370,6 +377,7 @@ export function carrierStats(
           via: os[0].via,
           discharge: os[0].discharge,
           lastCy: os[0].lastCy,
+          railLeg: os[0].discharge !== os[0].lastCy,
           dray: leg,
           options: os.length,
           dates: new Set(os.map((o) => o.date)).size,
@@ -381,8 +389,27 @@ export function carrierStats(
           usable: false,
         };
       })
+      // WATER TO THE HAND-OVER POINT FIRST, ahead of how often a routing runs.
+      //
+      // Carriers publish inland variants of the same move, and counted as options they can bury the
+      // routing an operator would actually book. Measured, ONE on Nhava Sheva -> Los Angeles
+      // publishes four: discharge at New York, Norfolk or Savannah and rail across the country, at
+      // two options each, plus one that discharges at Los Angeles itself. All four are "direct" —
+      // no transshipment — and the East Coast three run 41.5, 44 and 46.5 days against the LA
+      // discharge's 35.5. Ordered by option count the single LA sailing came FOURTH and fell off the
+      // stack into "+1 more", so the row named three cross-country rail moves and hid the one that
+      // matters.
+      //
+      // THIS IS A PRIORITY, NOT A FILTER. The rail variants keep their options, stay usable, and
+      // still count toward every figure on the row — they are real things a forwarder can quote, and
+      // on a week when the water routing is full they are the answer. They just stop leading.
+      //
+      // A TRANSSHIPPED ROUTING THAT ENDS AT THE HAND-OVER POINT OUTRANKS A DIRECT ONE THAT RAILS.
+      // Hand-offs at sea are a risk the carrier carries; a rail leg after discharge is a different
+      // move on a different network, and that is the distinction being drawn here.
       .sort(
         (a, b) =>
+          Number(a.railLeg) - Number(b.railLeg) ||
           b.options - a.options ||
           a.ts - b.ts ||
           (a.median ?? Infinity) - (b.median ?? Infinity),

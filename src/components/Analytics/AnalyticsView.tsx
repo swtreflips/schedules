@@ -171,13 +171,25 @@ const LastCyCell = ({ c }: { c: CarrierRow }) => (
   <StackedCell
     c={c}
     render={(s) =>
-      s.lastCy === s.discharge ? (
-        <span className="an-dim" title="No inland move — the carrier hands over at the discharge port">
-          {s.lastCy}
-        </span>
+      s.railLeg ? (
+        <>
+          <span
+            className="an-service-cy"
+            title="The carrier moves the box this far inland after discharging; your drayage starts here"
+          >
+            {s.lastCy}
+          </span>
+          {/* Named on the row, because it is why this routing sits below the water ones. */}
+          <span
+            className="an-rail"
+            title={`Inland from ${s.discharge} — a different network and a different move`}
+          >
+            {" "}rail
+          </span>
+        </>
       ) : (
-        <span className="an-service-cy" title="The carrier moves the box this far inland; your drayage starts here">
-          {s.lastCy}
+        <span className="an-dim" title="No inland move — the carrier hands over where the box comes off the ship">
+          same as POD
         </span>
       )
     }
@@ -479,8 +491,13 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
             <strong>Drayage distance</strong> are one table turned sideways: they stack the same
             routings in the same order, so the second line of each belongs to the second routing. A
             carrier is rarely one service, and a second acceptable routing is not a faster transit
-            but <em>another chance at space</em>. The stack is ordered by how often each routing
-            runs rather than how fast it is, which is why a lower line is sometimes the quicker one.
+            but <em>another chance at space</em>. <strong>Routings that stay on the water to the
+            hand-over point come first</strong> — a carrier discharging at New York and railing to
+            Los Angeles is a genuine option, and on a full week it is the answer, but it is not the
+            one you reach for, so it sits below even a transshipped routing that ends where it
+            discharges. Those are marked <em>rail</em> under Last CY. Under that, the stack is
+            ordered by how often each routing runs rather than how fast it is, which is why a lower
+            line is sometimes the quicker one.
             A routing qualifies when it lands within 10% of the lane — the same margin the table
             uses everywhere to decide a difference is worth acting on; <strong>+N slower</strong> is
             what did not, and a carrier with nothing inside the margin still shows its best routing,

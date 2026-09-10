@@ -197,6 +197,50 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   check("a carrier with nothing in reach reads zero", [slow.usableServices, slow.usableOptions], [0, 0]);
 }
 
+// ── WATER TO THE HAND-OVER POINT OUTRANKS A RAIL LEG ────────────────────────
+//
+// Shaped from the real case. ONE on Nhava Sheva -> Los Angeles publishes four routings: discharge at
+// New York, Norfolk or Savannah and rail across the country, two options each, plus ONE sailing that
+// discharges at Los Angeles itself. Every one of them is "direct" — no transshipment — so nothing in
+// the depth columns separates them, and ordered by option count the single LA sailing came fourth
+// and fell off the stack into "+1 more". The row named three cross-country rail moves and hid the
+// one an operator would actually book.
+{
+  const rows = [
+    ...svcTo("ONE", 1, 35.5, "Los Angeles, CA", [], "Los Angeles, CA", 1),
+    ...svcTo("ONE", 2, 41.5, "Los Angeles, CA", [], "New York, NY", 3),
+    ...svcTo("ONE", 2, 44, "Los Angeles, CA", [], "Norfolk, VA", 7),
+  ];
+  const c = carrierStats(rows, { pol: "POL", lastCy: "Los Angeles, CA" })[0];
+
+  check("the water routing leads despite having the fewest options",
+    [c.services[0].discharge, c.services[0].options], ["Los Angeles/Long Beach, CA", 1]);
+  check("...and is what `mainRoute` names", c.mainRoute.discharge, "Los Angeles/Long Beach, CA");
+  check("...it is the one with no inland move", c.services.map((s) => s.railLeg), [false, true, true]);
+  check("...the rail ones follow, busiest first", c.services.slice(1).map((s) => s.discharge), ["New York, NY", "Norfolk, VA"]);
+
+  // PRIORITISED, NOT DISCOUNTED. Nothing is filtered, nothing loses its options, and a rail routing
+  // within reach of the lane is still usable — on a week when the water sailing is full it is the
+  // answer, and the table has to keep offering it.
+  check("every routing is still there", c.services.length, 3);
+  check("...with all five options counted", c.options, 5);
+  check("...and the rail ones still usable", c.services.filter((s) => s.railLeg && s.usable).length, 2);
+}
+
+// A TRANSSHIPPED ROUTING THAT ENDS AT THE HAND-OVER POINT BEATS A DIRECT ONE THAT RAILS — even when
+// the rail routing is more frequent AND faster. Hand-offs at sea are a risk the carrier carries; a
+// rail leg after discharge is a different move on a different network.
+{
+  const rows = [
+    ...svcTo("X", 1, 40, "Oakland, CA", ["Busan, Republic Of Korea"], "Oakland, CA", 1),
+    ...svcTo("X", 5, 30, "Oakland, CA", [], "New York, NY", 3),
+  ];
+  const c = carrierStats(rows, { pol: "POL", lastCy: "Oakland, CA" })[0];
+  check("a transshipped water routing outranks a direct rail one", c.services[0].via, ["Busan, Republic Of Korea"]);
+  check("...even though the rail one is faster", [c.services[0].median, c.services[1].median], [40, 30]);
+  check("...and more frequent", [c.services[0].options, c.services[1].options], [1, 5]);
+}
+
 // ── DRAYAGE IS CONTEXT, NOT COMPARISON ───────────────────────────────────────────────
 //
 // THE CENTRAL GUARANTEE: passing a dray map changes no number the table is ranked by. Drayage is a
