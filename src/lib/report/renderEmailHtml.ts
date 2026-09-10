@@ -116,23 +116,37 @@ function routingName(label: string, destination: string): string {
   return label.endsWith(suffix) ? `via ${label.slice(0, -suffix.length)}` : label;
 }
 
-/** A carrier's usable routings, stacked inside one cell. `<br>` is the only line break Word obeys. */
-function servicesCell(c: CarrierRow, destination: string): string {
+/**
+ * Which routings a row shows — the same selection the screen makes, so the two agree.
+ *
+ * A CARRIER ALWAYS NAMES WHAT IT RUNS, even when none of it clears the margin. Printing "no routing
+ * within +10%" and stopping left a row with options, a median and a sailing window beside an empty
+ * cell, which reads as broken data rather than as a slow carrier.
+ */
+function shownServices(c: CarrierRow) {
   const usable = c.services.filter((s) => s.usable);
   const notUsable = c.services.filter((s) => !s.usable);
+  return {
+    usable,
+    notUsable,
+    shown: usable.length ? usable.slice(0, SERVICES_SHOWN) : notUsable.slice(0, 1),
+    more: usable.length ? usable.length - usable.slice(0, SERVICES_SHOWN).length : 0,
+    outOfReach: usable.length === 0,
+  };
+}
 
-  // A CARRIER ALWAYS NAMES WHAT IT RUNS, even when none of it clears the margin — the same fix the
-  // on-screen cell needed. Printing "no routing within +10%" and stopping left a row with options,
-  // a median and a sailing window beside an empty cell, which reads as broken data rather than as
-  // a slow carrier. Shown dimmed and labelled instead; the ranking is unchanged.
-  const shown = usable.length ? usable.slice(0, SERVICES_SHOWN) : notUsable.slice(0, 1);
-  const more = usable.length ? usable.length - shown.length : 0;
-  const outOfReach = usable.length === 0;
+/**
+ * The routings a carrier runs, stacked. `<br>` is the only line break Word obeys.
+ *
+ * NAMES AND COUNTS ONLY — each routing's median is the column beside this one, stacked in the same
+ * order so line two belongs to line two. Splitting them apart is what makes the pair readable: a
+ * carrier's three routings can share a transit and differ enormously in what happens on the ground.
+ */
+function servicesCell(c: CarrierRow, destination: string): string {
+  const { shown, more, notUsable, outOfReach } = shownServices(c);
 
   const lines = shown.map((s) => {
-    const body =
-      `${esc(routingName(s.label, destination))} <span style="color:${MUTED}">×${s.options}</span> ` +
-      `<strong>${num(s.median)}d</strong>`;
+    const body = `${esc(routingName(s.label, destination))} <span style="color:${MUTED}">×${s.options}</span>`;
     return outOfReach ? `<span style="color:${MUTED}">${body}</span>` : body;
   });
 
@@ -150,6 +164,17 @@ function servicesCell(c: CarrierRow, destination: string): string {
   }
   if (tail.length) lines.push(`<span style="color:${FAINT};font-size:11px">${tail.join(" · ")}</span>`);
 
+  return lines.join("<br>");
+}
+
+/** Each routing's own median, lined up with the routing beside it. */
+function serviceMedianCell(c: CarrierRow): string {
+  const { shown, outOfReach } = shownServices(c);
+  if (!shown.length) return `<span style="color:${FAINT}">—</span>`;
+  const lines = shown.map((s) => {
+    const body = `<strong>${num(s.median)}${s.median == null ? "" : "d"}</strong>`;
+    return outOfReach ? `<span style="color:${MUTED}">${body}</span>` : body;
+  });
   return lines.join("<br>");
 }
 
@@ -179,6 +204,7 @@ function carrierRow(c: CarrierRow, destination: string): string {
     ) +
     td(String(c.options), true) +
     td(servicesCell(c, destination)) +
+    td(serviceMedianCell(c), true) +
     td(`${num(c.transit.median)}${range}`, true) +
     td(vs, true) +
     "</tr>"
@@ -190,7 +216,8 @@ const carrierHeader =
   th("Carrier") +
   th("Direct", true) +
   th("Options", true) +
-  th("Usable services") +
+  th("Main services") +
+  th("Service median", true) +
   th("Median / range", true) +
   th("vs lane", true) +
   "</tr>";
@@ -291,12 +318,16 @@ export function renderEmailHtml(r: WeeklyReport, full = false): string {
       `transship leaving the same day are two.<br>` +
       `<strong>Best (median)</strong> is the fastest carrier by median transit, not by its quickest ` +
       `single sailing.<br>` +
-      `<strong>Usable services</strong> lists every routing a carrier runs whose median lands within ` +
-      `10% of the lane median. A carrier is rarely one service, and a second acceptable routing is ` +
-      `not a faster transit — it is <em>another chance at space</em> at a transit that still works. ` +
-      `The lines are ordered by how often each routing runs, not how fast it is, so the top line is ` +
-      `what the carrier actually offers most and a lower line is sometimes the quicker one. ` +
-      `“+N slower” is what did not clear the margin.<br>` +
+      `<strong>Main services</strong> lists every routing a carrier runs whose median lands within ` +
+      `10% of the lane median, with <strong>Service median</strong> beside it carrying each of ` +
+      `those routings' own transit, line for line. A carrier is rarely one service, and a second ` +
+      `acceptable routing is not a faster transit — it is <em>another chance at space</em> at a ` +
+      `transit that still works. The lines are ordered by how often each routing runs, not how fast ` +
+      `it is, so the top line is what the carrier offers most and a lower line is sometimes the ` +
+      `quicker one. “+N slower” is what did not clear the margin, and a carrier with nothing inside ` +
+      `it still shows its best routing, greyed and marked “out of reach”. ` +
+      `<strong>Median / range</strong> two columns right is the carrier's figure across everything ` +
+      `it runs, so it matches the service medians only when a carrier has one service.<br>` +
       `<strong>Edge</strong> is the lane median minus that best carrier: what picking the right ` +
       `carrier is worth, in days. A dash means every carrier performs alike and the choice is ` +
       `not worth arguing over.`,

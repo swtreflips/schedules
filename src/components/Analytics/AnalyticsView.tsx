@@ -70,25 +70,84 @@ function SpreadCell({ s }: { s: Spread }) {
  */
 const SERVICES_SHOWN = 3;
 
-function ServicesCell({ c }: { c: CarrierRow }) {
+/**
+ * Which routings a row shows, decided once and read by three columns.
+ *
+ * MAIN SERVICES, SERVICE MEDIAN AND DRAYAGE DISTANCE ARE ONE TABLE TURNED SIDEWAYS. Each is a stack
+ * of the same routings in the same order, so line 2 of Service median is the median of line 2 of
+ * Main services. A single figure per carrier could not do that — a carrier running Jacksonville at
+ * 84 miles and Savannah at 210 has no one drayage — and a range would say "somewhere between these"
+ * where the row can simply say which is which.
+ *
+ * The alignment holds because `.an-service` is `nowrap`: a long routing name scrolls the table
+ * rather than wrapping, so the stacks cannot drift out of step.
+ *
+ * A CARRIER ALWAYS NAMES WHAT IT RUNS, even when none of it clears the margin. This used to render
+ * "nothing within reach of the lane" and stop. On Cartagena -> Seymour, IN that produced an HMM row
+ * carrying 2 options, a 27.5-day median, a spread and a sailing window beside an empty cell — while
+ * Rank plainly listed its two Cincinnati sailings. It read as broken data, and was reported as a
+ * bug, correctly. The fallback shows the best routing anyway, dimmed and labelled; the
+ * classification does not move, only the silence.
+ */
+function shownServices(c: CarrierRow) {
   const usable = c.services.filter((s) => s.usable);
   const slower = c.services.filter((s) => !s.usable);
+  return {
+    usable,
+    slower,
+    shown: usable.length ? usable.slice(0, SERVICES_SHOWN) : slower.slice(0, 1),
+    rest: usable.length ? usable.length - usable.slice(0, SERVICES_SHOWN).length : 0,
+    outOfReach: usable.length === 0,
+  };
+}
 
-  // A CARRIER ALWAYS NAMES WHAT IT RUNS, even when none of it clears the margin.
-  //
-  // This cell used to render "nothing within reach of the lane" and stop. On Cartagena ->
-  // Seymour, IN that produced an HMM row carrying 2 options, a 27.5-day median, a spread and a
-  // sailing window beside an empty services cell — and the same two Cincinnati sailings were
-  // plainly visible under Rank. It read as broken data, and it was reported as a bug, correctly:
-  // a row that shows a carrier exists and then declines to say what it does is worse than one that
-  // says "here it is, and it is eight days over the lane".
-  //
-  // So the fallback shows the carrier's best routing anyway, dimmed and labelled out of reach. The
-  // classification does not change — HMM still sorts last and still counts zero usable services —
-  // only the silence does.
-  const shown = usable.length ? usable.slice(0, SERVICES_SHOWN) : slower.slice(0, 1);
-  const rest = usable.length ? usable.length - shown.length : 0;
-  const outOfReach = usable.length === 0;
+/** Each routing's own ocean median, stacked to line up with Main services. */
+function ServiceMedianCell({ c }: { c: CarrierRow }) {
+  const { shown, outOfReach } = shownServices(c);
+  if (!shown.length) return <td className="an-num an-dim">—</td>;
+  return (
+    <td className={"an-num an-services" + (outOfReach ? " an-service--far" : "")}>
+      {shown.map((s) => (
+        <span className="an-service" key={s.label + s.lastCy}>
+          {fmt(s.median)}
+          {s.median == null ? "" : "d"}
+        </span>
+      ))}
+    </td>
+  );
+}
+
+/**
+ * Each routing's ground leg, stacked the same way.
+ *
+ * MEASURED FROM THE LAST CY, NOT THE DISCHARGE PORT. On Nhava Sheva -> Gainesville, HPL discharges
+ * at Savannah and carries the box to Tampa: the customer's drayage is Tampa's 137 miles, not
+ * Savannah's 210. That is why the routing beside it names both ends.
+ */
+function DrayageCell({ c }: { c: CarrierRow }) {
+  const { shown, outOfReach } = shownServices(c);
+  if (!shown.length) return <td className="an-num an-dim">—</td>;
+  return (
+    <td className={"an-num an-services" + (outOfReach ? " an-service--far" : "")}>
+      {shown.map((s) => (
+        <span
+          className={"an-service" + (s.dray ? "" : " an-dim")}
+          key={s.label + s.lastCy}
+          title={
+            s.dray
+              ? `${s.lastCy} → the destination: ${s.dray.miles} mi, ${s.dray.hours}h drive, counted as ${s.dray.days} day${s.dray.days === 1 ? "" : "s"}`
+              : "No ground leg resolved for this routing"
+          }
+        >
+          {s.dray ? `${s.dray.miles} mi` : "—"}
+        </span>
+      ))}
+    </td>
+  );
+}
+
+function ServicesCell({ c }: { c: CarrierRow }) {
+  const { shown, rest, usable, slower, outOfReach } = shownServices(c);
 
   const title = (list: typeof c.services) =>
     list
@@ -122,21 +181,19 @@ function ServicesCell({ c }: { c: CarrierRow }) {
                 {s.lastCy}
               </span>
             )}
-            <span className="an-dim" title={`${s.options} options across ${s.dates} sailing dates`}>
+            {/* The routing and how often it runs, and nothing else. The transit lives in Ocean and
+                the ground leg in Drayage distance — both their own columns, so this one stays a
+                list of what the carrier actually offers. Each line's own figures are in the
+                tooltip, since a column can only describe the carrier as a whole. */}
+            <span
+              className="an-dim"
+              title={
+                `${s.options} options across ${s.dates} sailing dates · ${fmt(s.median)}d ocean` +
+                (s.dray ? ` · ${s.dray.miles}mi from ${s.lastCy} · ${fmt(s.doorMedian)}d door` : "")
+              }
+            >
               {" "}×{s.options}
             </span>
-            <span className="an-service-t">{fmt(s.median)}d</span>
-            {/* The ground leg belongs on the ROUTING, not on the carrier: one carrier can reach
-                Jacksonville and Savannah for the same warehouse, and those are the two numbers the
-                reader is actually choosing between. */}
-            {s.dray && (
-              <span
-                className="an-dim an-service-dray"
-                title={`${s.lastCy} → the destination: ${s.dray.miles} road miles, ${s.dray.hours}h drive, counted as ${s.dray.days} day${s.dray.days === 1 ? "" : "s"}`}
-              >
-                {" "}· {s.dray.miles}mi
-              </span>
-            )}
           </span>
         ))
       )}
@@ -279,9 +336,10 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
                 <th className="an-num" title="Quotable options: one routing, on one day. Direct + 1 TS + 2+ TS always add up to this, because an option has exactly one routing depth.">Options</th>
                 <th className="an-num" title="Days a box can actually leave on. Fewer than Options means several routings share a departure day.">Dates</th>
                 <th className="an-num" title="Mean transshipments per option. Lower is a shorter, less fragile route.">Avg TS</th>
-                <th title="Every routing this carrier runs that is within reach of the lane — each one is another chance at space. Busiest first, so the top line is the service it runs most. The mileage is that routing's ground leg to your destination.">Usable services</th>
-                <th className="an-num" title="Ocean transit plus the ground leg — what the customer actually waits. This is what the table is ranked on, because the routings end in different ports.">Door</th>
-                <th className="an-num" title="Ocean transit only — port of loading to the discharge that routing uses">Ocean — median / range</th>
+                <th title="Every routing this carrier runs that is within reach of the lane — each one is another chance at space. Busiest first, so the top line is the service it runs most.">Main services</th>
+                <th className="an-num" title="Each routing's own median transit, lined up with the routing beside it. Not the same as the carrier's overall median two columns right — a carrier running three routings has three of these.">Service median</th>
+                <th className="an-num" title="Road miles from where each routing hands the box over to your destination — measured from the Last CY, which is not always the discharge port.">Drayage distance</th>
+                <th className="an-num" title="Ocean transit only — port of loading to the discharge that routing uses. Across every option this carrier offers, so it describes the carrier rather than any one routing.">Ocean — median / range</th>
                 <th className="an-num" title="Slowest minus fastest. A wide spread means the transit you were quoted is not the one you can count on.">Spread</th>
                 <th className="an-num" title="Against the lane's median carrier">vs lane</th>
                 <th title="First and last published sailing. A service ending soon is thin in a different way from a small one.">Sailing window</th>
@@ -315,17 +373,8 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
                   <td className="an-num an-dim">{c.sailDates}</td>
                   <td className="an-num an-strong">{c.avgTs.toFixed(2)}</td>
                   <ServicesCell c={c} />
-                  {/* The ranked figure leads in weight; ocean sits beside it so the reader can see
-                      which half of the journey each number came from. */}
-                  <td className="an-num an-strong">
-                    {c.door?.median == null ? (
-                      <span className="an-dim" title="No ground leg resolved for this carrier's routings">
-                        —
-                      </span>
-                    ) : (
-                      `${c.door.median}d`
-                    )}
-                  </td>
+                  <ServiceMedianCell c={c} />
+                  <DrayageCell c={c} />
                   <SpreadCell s={c.transit} />
                   {/* Its own column because it decides bookings and was unreadable inside the
                       range. On Semarang -> Savannah, HMM has the most sailings on the lane and a
@@ -356,21 +405,29 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
             carries several.
             <strong> Direct / 1 TS / 2+ TS</strong> always add up to <strong>Options</strong>,
             because an option has exactly one routing depth.
-            <strong> Usable services</strong> lists every routing a carrier runs that lands within
-            10% of the lane median — the same margin the table uses to decide a difference is worth
-            acting on. A carrier is rarely one service, and a second acceptable routing is not a
-            faster transit but <em>another chance at space</em>. The stack is ordered by how often
-            each routing runs rather than how fast it is, which is why a lower line is sometimes the
-            quicker one. <strong>+N slower</strong> is what did not clear the margin; hover it to
-            see what and by how much.
-            <strong> Door</strong> is ocean transit plus the ground leg, and it is what the table is
-            ranked on. It has to be: your carriers do not all end in the same port, so comparing
-            ocean legs alone compares different journeys. The mileage beside each routing is the
-            road distance from that discharge point to your destination — a ground leg up to{" "}
-            {LOCAL_DRAY_MILES} miles counts as one day, up to {REGIONAL_DRAY_MILES} as two, beyond
-            that as three, because past local range a dray stops being a same-day turn. Those bands
-            are a judgement about how the move runs, not a measurement; the miles are the
-            measurement, and they are what the ground leg <em>costs</em>.
+            <strong> Main services</strong>, <strong>Service median</strong> and{" "}
+            <strong>Drayage distance</strong> are one table turned sideways: they stack the same
+            routings in the same order, so the second line of each belongs to the second routing. A
+            carrier is rarely one service, and a second acceptable routing is not a faster transit
+            but <em>another chance at space</em>. The stack is ordered by how often each routing
+            runs rather than how fast it is, which is why a lower line is sometimes the quicker one.
+            A routing qualifies when it lands within 10% of the lane — the same margin the table
+            uses everywhere to decide a difference is worth acting on; <strong>+N slower</strong> is
+            what did not, and a carrier with nothing inside the margin still shows its best routing,
+            greyed and marked <em>out of reach</em>.
+            <strong> Service median</strong> is per routing. The <strong>Ocean</strong> column beside
+            it is per <em>carrier</em>, across everything it runs, so the two agree only when a
+            carrier has one service.
+            <strong> Drayage distance</strong> is measured from where the carrier hands the box over
+            — the Last CY, which is not always the discharge port, so a routing reading{" "}
+            <em>Savannah → Tampa</em> is drayed from Tampa. <strong>The table is ranked on ocean plus
+            that ground leg</strong>, not on ocean alone: your carriers do not all end in the same
+            place, so comparing sailings alone compares different journeys. A leg up to{" "}
+            {LOCAL_DRAY_MILES} miles counts as a day, up to {REGIONAL_DRAY_MILES} as two, beyond
+            that as three — past local range a dray stops being a same-day turn.{" "}
+            <strong>vs lane</strong> is that combined figure against the lane's median carrier, so
+            it is where the ranking shows its working. The bands are a judgement about how the move
+            runs; the miles are the measurement, and they are what the ground leg <em>costs</em>.
             <strong> Spread</strong> is what the median hides: the most-served carrier on a lane is
             often the least predictable, and a 27-day spread means the transit you were quoted is
             not the one you can count on. <strong>Sailing window</strong> separates a service that
