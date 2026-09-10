@@ -51,6 +51,22 @@ export const samePlace = (a: string, b: string): boolean =>
  * stop rather than a hop between them.
  */
 export function routeLabel(s: Schedule): string {
+  return routeStops(s).join(" > ");
+}
+
+/**
+ * The same routing as its ordered stops rather than one string — every stop the box touches after
+ * loading, ending at the discharge port.
+ *
+ * SPLIT OUT SO THE TABLE CAN SHOW THE PARTS IN THEIR OWN COLUMNS without parsing the label back
+ * apart on " > ". A separator that appears in the data would silently mis-split a routing, and the
+ * dedupe below means the parts are not simply `ts_ports` and `port_of_discharge` either — a chain
+ * touching both halves of one complex collapses to one stop, so which entry is the discharge port
+ * is only knowable after folding.
+ *
+ * `routeLabel` is this joined, so the string and the parts cannot disagree.
+ */
+export function routeStops(s: Schedule): string[] {
   const stops = [...(s.ts_ports ?? []), s.port_of_discharge].map(canonicalPort);
-  return stops.filter((p, i) => p !== stops[i - 1]).join(" > ");
+  return stops.filter((p, i) => p !== stops[i - 1]);
 }

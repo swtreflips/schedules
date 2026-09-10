@@ -920,6 +920,27 @@ input[type="number"] {
 .an-table td.an-services { vertical-align: top; }
 .an-service { display: block; white-space: nowrap; }
 
+/* THE SPANNING HEADER over TS chain / POD / Last CY / Options. Centred and bracketed by the same
+   rule the group's outer edges carry, so the four columns read as one thing that has been opened up
+   rather than as four unrelated ones that happen to be adjacent. */
+.an-table th.an-group {
+  text-align: center;
+  border-bottom: 1px solid var(--color-rule);
+}
+/* The sub-heads sit under it, quieter — they name parts, not columns in their own right. */
+.an-table th.an-sub {
+  font-size: 10px;
+  color: var(--color-faint);
+  letter-spacing: 0.05em;
+}
+/* One vertical rule down each side of the group, so the eye can see where the routing starts and
+   stops without the four columns needing borders of their own. */
+.an-table th.an-group,
+.an-table th.an-sub:first-of-type,
+.an-table td.an-group-start,
+.an-table th.an-group-end,
+.an-table td.an-group-end { border-left: 1px solid var(--color-rule); }
+
 /* A rule between routings, so a three-deep stack reads as three things rather than as a paragraph.
    APPLIED TO EVERY STACKED COLUMN, not only the two that carry text: the spacing is what keeps the
    stacks in step, so a column without it would sit a few pixels higher on every line after the

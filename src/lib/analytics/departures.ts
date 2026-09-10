@@ -1,5 +1,5 @@
 import type { Schedule } from "../../types/schedule";
-import { canonicalPort, routeLabel } from "./ports";
+import { canonicalPort, routeLabel, routeStops } from "./ports";
 
 /**
  * The unit of analysis is a CONNECTION: one bookable way to move the box from POL to Last CY.
@@ -164,6 +164,24 @@ export interface Option {
   date: string;
   /** `routeLabel` — the transshipment path then the discharge port, port complexes folded. */
   chain: string;
+  /**
+   * The transshipment path alone, canonical and folded — `chain` without its last stop.
+   *
+   * Empty for a direct sailing. Carried rather than parsed back out of `chain`, so the table can
+   * give the hand-offs their own column without splitting a string on a separator that a port name
+   * could one day contain.
+   */
+  via: string[];
+  /**
+   * The discharge port, CANONICAL — the last stop of the chain, so a Long Beach discharge reads as
+   * the Los Angeles/Long Beach complex the way it does everywhere else.
+   *
+   * SEPARATE FROM `pod`, which stays the berth as published. Both are wanted: the complex is the
+   * right unit for comparing routings, and the berth is what a booking actually names — which is
+   * why `CarrierRow.pods` still lists them unfolded.
+   */
+  discharge: string;
+  /** The discharge port AS PUBLISHED, unfolded. See `discharge`. */
   pod: string;
   /**
    * Where the carrier's own responsibility ends, canonicalised.
@@ -224,6 +242,9 @@ export function toOptions(rows: Schedule[]): Option[] {
       carrier: first.carrier_code,
       date: (first.etd ?? "").slice(0, 10),
       chain: routeLabel(first),
+      // One call, so the parts and the label are the same folding by construction.
+      via: routeStops(first).slice(0, -1),
+      discharge: routeStops(first).at(-1) ?? canonicalPort(first.port_of_discharge),
       pod: first.port_of_discharge,
       lastCy: canonicalPort(first.last_cy),
       // SHALLOWEST, NOT THE FIRST ROW'S. Folding a port complex can put a direct and a feeder to

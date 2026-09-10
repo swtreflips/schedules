@@ -143,7 +143,12 @@ export function corridorStats(rows: Schedule[], lane?: Lane): CorridorRow[] {
  * the busiest of them describes a third of what ZIM can actually do.
  */
 export interface Service {
+  /** The whole routing as one string — `via` and `discharge` joined. Still the identity. */
   label: string;
+  /** The hand-offs, in order. Empty for a direct sailing. */
+  via: string[];
+  /** Where the box comes off the ship, canonical. */
+  discharge: string;
   options: number;
   dates: number;
   ts: number;
@@ -362,6 +367,8 @@ export function carrierStats(
         const median = spreadOf(os.map((o) => o.transit)).median;
         return {
           label: os[0].chain,
+          via: os[0].via,
+          discharge: os[0].discharge,
           lastCy: os[0].lastCy,
           dray: leg,
           options: os.length,

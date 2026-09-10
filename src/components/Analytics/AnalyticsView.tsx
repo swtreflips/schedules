@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   carrierStats,
   corridorStats,
   type CarrierRow,
   type Lane,
+  type Service,
 } from "../../lib/analytics/lane";
 import { laneVerdict } from "../../lib/analytics/rfq";
 import { useDrayage } from "../../state/useDrayage";
@@ -101,114 +102,128 @@ function shownServices(c: CarrierRow) {
   };
 }
 
-/** Each routing's own ocean median, stacked to line up with Main services. */
-function ServiceMedianCell({ c }: { c: CarrierRow }) {
+/**
+ * One stacked column of the service block — a cell that renders one line per routing shown.
+ *
+ * FIVE COLUMNS ARE ONE TABLE TURNED SIDEWAYS: TS chain, POD and Last CY under a spanning "Main
+ * services" header, then Service median and Drayage distance. Each stacks the same routings in the
+ * same order, so a row of the stack reads across as one routing. Splitting the routing into three
+ * columns is what makes it skimmable — "Singapore, Singapore > Shanghai, China > Los Angeles/Long
+ * Beach, CA → Tampa, FL ×5" is three separate facts wearing one string, and the eye cannot compare
+ * discharge ports down a column when they sit at a different offset on every line.
+ *
+ * The alignment holds because `.an-service` is `nowrap` and every cell renders from the same
+ * `shownServices(c)`, so the stacks cannot differ in length or drift out of step.
+ */
+function StackedCell({
+  c,
+  render,
+  className = "",
+  title,
+}: {
+  c: CarrierRow;
+  render: (s: Service) => ReactNode;
+  className?: string;
+  title?: (s: Service) => string;
+}) {
   const { shown, outOfReach } = shownServices(c);
-  if (!shown.length) return <td className="an-num an-dim">—</td>;
+  if (!shown.length) return <td className={`${className} an-dim`}>—</td>;
   return (
-    <td className={"an-num an-services" + (outOfReach ? " an-service--far" : "")}>
+    <td className={`${className} an-services${outOfReach ? " an-service--far" : ""}`}>
       {shown.map((s) => (
-        <span className="an-service" key={s.label + s.lastCy}>
-          {fmt(s.median)}
-          {s.median == null ? "" : "d"}
+        <span className="an-service" key={s.label + s.lastCy} title={title?.(s)}>
+          {render(s)}
         </span>
       ))}
     </td>
   );
 }
+
+/** The hand-offs, in order. A direct sailing says so rather than leaving the cell blank. */
+const ViaCell = ({ c }: { c: CarrierRow }) => (
+  <StackedCell
+    c={c}
+    className="an-group-start"
+    render={(s) =>
+      s.via.length ? s.via.join(" > ") : <span className="an-dim">direct</span>
+    }
+    title={(s) =>
+      s.via.length
+        ? `${s.via.length} transshipment${s.via.length === 1 ? "" : "s"}: ${s.via.join(" → ")}`
+        : "No transshipment — one vessel from load port to discharge"
+    }
+  />
+);
+
+/** Where the box comes off the ship. */
+const PodCell = ({ c }: { c: CarrierRow }) => (
+  <StackedCell c={c} render={(s) => s.discharge} />
+);
 
 /**
- * Each routing's ground leg, stacked the same way.
+ * Where the carrier hands over — and the reason this is not the same column as POD.
  *
- * MEASURED FROM THE LAST CY, NOT THE DISCHARGE PORT. On Nhava Sheva -> Gainesville, HPL discharges
- * at Savannah and carries the box to Tampa: the customer's drayage is Tampa's 137 miles, not
- * Savannah's 210. That is why the routing beside it names both ends.
+ * Measured on Nhava Sheva -> Gainesville, HPL discharges at Savannah and carries the box on to
+ * Tampa: 26 of the 53 rows that search returns are that shape, and the drayage beside it is Tampa's
+ * 137 miles rather than Savannah's 210. When the two are the same place the box does not move
+ * inland at all, so it reads quietly.
  */
-function DrayageCell({ c }: { c: CarrierRow }) {
-  const { shown, outOfReach } = shownServices(c);
-  if (!shown.length) return <td className="an-num an-dim">—</td>;
-  return (
-    <td className={"an-num an-services" + (outOfReach ? " an-service--far" : "")}>
-      {shown.map((s) => (
-        <span
-          className={"an-service" + (s.dray ? "" : " an-dim")}
-          key={s.label + s.lastCy}
-          title={
-            s.dray
-              ? `${s.lastCy} → the destination: ${s.dray.miles} mi, ${s.dray.hours}h drive, counted as ${s.dray.days} day${s.dray.days === 1 ? "" : "s"}`
-              : "No ground leg resolved for this routing"
-          }
-        >
-          {s.dray ? `${s.dray.miles} mi` : "—"}
+const LastCyCell = ({ c }: { c: CarrierRow }) => (
+  <StackedCell
+    c={c}
+    render={(s) =>
+      s.lastCy === s.discharge ? (
+        <span className="an-dim" title="No inland move — the carrier hands over at the discharge port">
+          {s.lastCy}
         </span>
-      ))}
-    </td>
-  );
-}
+      ) : (
+        <span className="an-service-cy" title="The carrier moves the box this far inland; your drayage starts here">
+          {s.lastCy}
+        </span>
+      )
+    }
+  />
+);
 
-function ServicesCell({ c }: { c: CarrierRow }) {
+/** How often each routing runs, plus the tail that describes the stack as a whole. */
+function OptionsCell({ c }: { c: CarrierRow }) {
   const { shown, rest, usable, slower, outOfReach } = shownServices(c);
 
-  const title = (list: typeof c.services) =>
+  const title = (list: Service[]) =>
     list
       .map(
         (s) =>
-          `${s.label}${s.label.endsWith(s.lastCy) ? "" : ` → ${s.lastCy}`} ×${s.options} · ${fmt(s.median)}d` +
+          `${s.label}${s.lastCy === s.discharge ? "" : ` → ${s.lastCy}`} ×${s.options} · ${fmt(s.median)}d` +
           (s.dray ? ` + ${s.dray.miles}mi dray from ${s.lastCy} = ${fmt(s.doorMedian)}d door` : ""),
       )
       .join("\n");
 
   return (
-    <td className="an-services">
+    <td className={"an-num an-services" + (outOfReach ? " an-service--far" : "")}>
       {shown.length === 0 ? (
         <span className="an-dim">no published routing</span>
       ) : (
         shown.map((s) => (
           <span
-            className={"an-service" + (outOfReach ? " an-service--far" : "")}
+            className="an-service"
             key={s.label + s.lastCy}
+            title={`${s.options} options across ${s.dates} sailing dates`}
           >
-            {s.label}
-            {/* THE HAND-OVER POINT, when it is not the discharge port.
-                Measured on Nhava Sheva -> Gainesville, HPL discharges at Savannah and carries the
-                box to Tampa — 26 of 53 rows on that search are this shape. The mileage beside this
-                line is measured from where the CUSTOMER takes over, so showing a chain ending
-                "Savannah" next to Tampa's 137 miles reads as Savannah being 137 miles away. It is
-                210. Naming both is the only honest way to put a ground leg on this row. */}
-            {!s.label.endsWith(s.lastCy) && (
-              <span className="an-service-cy" title="The carrier moves the box this far inland; your drayage starts here">
-                {" → "}
-                {s.lastCy}
-              </span>
-            )}
-            {/* The routing and how often it runs, and nothing else. The transit lives in Ocean and
-                the ground leg in Drayage distance — both their own columns, so this one stays a
-                list of what the carrier actually offers. Each line's own figures are in the
-                tooltip, since a column can only describe the carrier as a whole. */}
-            <span
-              className="an-dim"
-              title={
-                `${s.options} options across ${s.dates} sailing dates · ${fmt(s.median)}d ocean` +
-                (s.dray ? ` · ${s.dray.miles}mi from ${s.lastCy} · ${fmt(s.doorMedian)}d door` : "")
-              }
-            >
-              {" "}×{s.options}
-            </span>
+            ×{s.options}
           </span>
         ))
       )}
       {rest > 0 && (
         <span className="an-dim an-service-more" title={title(usable.slice(SERVICES_SHOWN))}>
-          +{rest} more usable
+          +{rest} more
         </span>
       )}
-      {/* Why the line above is greyed out, stated on the row rather than left to be inferred from
-          the vs-lane column three cells away. */}
+      {/* Why the lines above are greyed out, stated here rather than left to be inferred from the
+          vs-lane column several cells away. */}
       {outOfReach && shown.length > 0 && (
         <span className="an-slow an-service-more">
           out of reach
-          {c.vsLaneMedian != null && ` — ${c.vsLaneMedian > 0 ? "+" : ""}${c.vsLaneMedian}d vs the lane`}
-          {slower.length > 1 && `, ${slower.length - 1} other routing${slower.length === 2 ? "" : "s"}`}
+          {c.vsLaneMedian != null && ` ${c.vsLaneMedian > 0 ? "+" : ""}${c.vsLaneMedian}d`}
         </span>
       )}
       {!outOfReach && slower.length > 0 && (
@@ -219,6 +234,25 @@ function ServicesCell({ c }: { c: CarrierRow }) {
     </td>
   );
 }
+
+/** Each routing's own ocean median. */
+const ServiceMedianCell = ({ c }: { c: CarrierRow }) => (
+  <StackedCell c={c} className="an-num an-group-end" render={(s) => `${fmt(s.median)}${s.median == null ? "" : "d"}`} />
+);
+
+/** Each routing's ground leg, measured from its Last CY. */
+const DrayageCell = ({ c }: { c: CarrierRow }) => (
+  <StackedCell
+    c={c}
+    className="an-num"
+    render={(s) => (s.dray ? `${s.dray.miles} mi` : <span className="an-dim">—</span>)}
+    title={(s) =>
+      s.dray
+        ? `${s.dray.from ?? s.lastCy} → the destination: ${s.dray.miles} mi, ${s.dray.hours}h drive`
+        : "No ground leg resolved for this routing"
+    }
+  />
+);
 
 /** Signed days against the lane's median carrier. Faster reads as a gain, not a smaller number. */
 function VsLane({ v }: { v: number | null }) {
@@ -342,22 +376,36 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
           <h3 className="eyebrow">Carriers — most direct first, then fewest transshipments</h3>
           <table className="an-table">
             <thead>
+              {/* TWO HEADER ROWS. The routing is three separate facts — where it transships, where
+                  it discharges, where the carrier hands over — and one string carrying all three
+                  cannot be compared down a column, because every line puts them at a different
+                  offset. Split into their own columns the discharge ports line up under each other,
+                  which is the comparison the table exists for. They keep one heading because they
+                  are still one thing: the services this carrier runs. */}
               <tr>
-                <th>Carrier</th>
-                <th className="an-num" title="Direct options">Direct</th>
-                <th className="an-num" title="Options with one transshipment">1 TS</th>
-                <th className="an-num" title="Options with two or more transshipments">2+ TS</th>
-                <th className="an-num" title="Quotable options: one routing, on one day. Direct + 1 TS + 2+ TS always add up to this, because an option has exactly one routing depth.">Options</th>
-                <th className="an-num" title="Days a box can actually leave on. Fewer than Options means several routings share a departure day.">Dates</th>
-                <th className="an-num" title="Mean transshipments per option. Lower is a shorter, less fragile route.">Avg TS</th>
-                <th title="Every routing this carrier runs that is within reach of the lane — each one is another chance at space. Busiest first, so the top line is the service it runs most.">Main services</th>
-                <th className="an-num" title="Each routing's own median transit, lined up with the routing beside it. Not the same as the carrier's overall median two columns right — a carrier running three routings has three of these.">Service median</th>
-                <th className="an-num" title="Road miles from where each routing hands the box over to your destination — measured from the Last CY, which is not always the discharge port.">Drayage distance</th>
-                <th className="an-num" title="Ocean transit only — port of loading to the discharge that routing uses. Across every option this carrier offers, so it describes the carrier rather than any one routing.">Ocean — median / range</th>
-                <th className="an-num" title="Slowest minus fastest. A wide spread means the transit you were quoted is not the one you can count on.">Spread</th>
-                <th className="an-num" title="Against the lane's median carrier">vs lane</th>
-                <th title="First and last published sailing. A service ending soon is thin in a different way from a small one.">Sailing window</th>
-                <th title="When this carrier was last scraped">Scraped</th>
+                <th rowSpan={2}>Carrier</th>
+                <th className="an-num" rowSpan={2} title="Direct options">Direct</th>
+                <th className="an-num" rowSpan={2} title="Options with one transshipment">1 TS</th>
+                <th className="an-num" rowSpan={2} title="Options with two or more transshipments">2+ TS</th>
+                <th className="an-num" rowSpan={2} title="Quotable options: one routing, on one day. Direct + 1 TS + 2+ TS always add up to this, because an option has exactly one routing depth.">Options</th>
+                <th className="an-num" rowSpan={2} title="Days a box can actually leave on. Fewer than Options means several routings share a departure day.">Dates</th>
+                <th className="an-num" rowSpan={2} title="Mean transshipments per option. Lower is a shorter, less fragile route.">Avg TS</th>
+                <th className="an-group" colSpan={4} title="Every routing this carrier runs that is within reach of the lane — each one is another chance at space. Busiest first, so the top line is the service it runs most.">
+                  Main services
+                </th>
+                <th className="an-num an-group-end" rowSpan={2} title="Each routing's own median transit, lined up with the routing beside it. Not the same as the carrier's overall median two columns right — a carrier running three routings has three of these.">Service median</th>
+                <th className="an-num" rowSpan={2} title="Road miles from where each routing hands the box over to your destination — measured from the Last CY, which is not always the discharge port.">Drayage distance</th>
+                <th className="an-num" rowSpan={2} title="Ocean transit only — port of loading to the discharge that routing uses. Across every option this carrier offers, so it describes the carrier rather than any one routing.">Ocean — median / range</th>
+                <th className="an-num" rowSpan={2} title="Slowest minus fastest. A wide spread means the transit you were quoted is not the one you can count on.">Spread</th>
+                <th className="an-num" rowSpan={2} title="Against the lane's median carrier">vs lane</th>
+                <th rowSpan={2} title="First and last published sailing. A service ending soon is thin in a different way from a small one.">Sailing window</th>
+                <th rowSpan={2} title="When this carrier was last scraped">Scraped</th>
+              </tr>
+              <tr>
+                <th className="an-sub" title="The hand-offs, in order. Blank means the box stays on one ship from load port to discharge.">TS chain</th>
+                <th className="an-sub" title="Where the box comes off the ship">POD</th>
+                <th className="an-sub" title="Where the carrier's responsibility ends and your drayage starts. Often the discharge port; when it is not, the carrier is moving the box inland for you.">Last CY</th>
+                <th className="an-sub an-num" title="Options on that routing — one routing, on one day">Options</th>
               </tr>
             </thead>
             <tbody>
@@ -386,7 +434,10 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
                       per departure; fewer dates means a day carries several routings. */}
                   <td className="an-num an-dim">{c.sailDates}</td>
                   <td className="an-num an-strong">{c.avgTs.toFixed(2)}</td>
-                  <ServicesCell c={c} />
+                  <ViaCell c={c} />
+                  <PodCell c={c} />
+                  <LastCyCell c={c} />
+                  <OptionsCell c={c} />
                   <ServiceMedianCell c={c} />
                   <DrayageCell c={c} />
                   <SpreadCell s={c.transit} />
