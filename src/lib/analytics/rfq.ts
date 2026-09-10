@@ -28,7 +28,9 @@ export function laneVerdict(lane: Lane, carriers: CarrierRow[]): Verdict {
     return {
       tone: "tough",
       headline: "No service in this snapshot",
-      detail: `Nothing published for ${lane.pol} → ${lane.lastCy} in the current window.`,
+      // The destination when there is one — the screen is answering for a door, and naming a port
+      // the user never typed would read as a different question from the one they asked.
+      detail: `Nothing published for ${lane.pol} → ${lane.destination ?? lane.lastCy} in the current window.`,
     };
   }
 

@@ -5,6 +5,7 @@ import {
   type Option,
   type Spread,
 } from "./departures";
+import { doorTransit, type Dray } from "./drayage";
 import { canonicalPort, routeLabel, samePlace } from "./ports";
 
 /**
@@ -24,6 +25,13 @@ import { canonicalPort, routeLabel, samePlace } from "./ports";
 export interface Lane {
   pol: string;
   lastCy: string;
+  /**
+   * The customer's city, when the caller is asking about a DOOR rather than a port pair.
+   *
+   * Set only in destination mode, where `lastCy` is the destination too and no single Last CY
+   * frames the question. Purely for labelling — the scoping and the statistics never read it.
+   */
+  destination?: string;
 }
 
 /**
@@ -127,6 +135,46 @@ export function corridorStats(rows: Schedule[], lane?: Lane): CorridorRow[] {
 
 // ── View B: carriers ─────────────────────────────────────────────────────────────────
 
+/**
+ * One routing a carrier runs on a lane, and what that routing delivers.
+ *
+ * A carrier is not one service. Measured on Laem Chabang -> Los Angeles/Long Beach, ZIM runs three
+ * — Yantian, Ningbo and Shanghai — at 23, 25 and 27.5 days against a 26-day lane. Reporting only
+ * the busiest of them describes a third of what ZIM can actually do.
+ */
+export interface Service {
+  label: string;
+  options: number;
+  dates: number;
+  ts: number;
+  /** Ocean transit — the median of this routing's options. */
+  median: number | null;
+  /**
+   * Where this routing lands. Constant across a POL -> Last CY lane; the whole distinction in
+   * destination mode, where one carrier may run one to Jacksonville and another to Savannah.
+   */
+  lastCy: string;
+  /** The ground leg from `lastCy` to the customer's door. Only in destination mode. */
+  dray?: Dray;
+  /**
+   * Ocean plus ground — what the customer actually waits.
+   *
+   * PRESENT ONLY IN DESTINATION MODE, and null there when either leg is unknown. Scoped to a lane
+   * every routing ends in the same place, so a door figure would be the ocean figure plus a
+   * constant: no information, and one more column to explain.
+   */
+  doorMedian?: number | null;
+  /**
+   * Not materially slower than the lane's median carrier — i.e. worth quoting.
+   *
+   * Set in a second pass, because the benchmark is the lane median and that is not known until
+   * every carrier on the lane has been summarised. MEASURED ON DOOR TRANSIT when a ground leg is
+   * known, because "can the customer live with this" stops being an ocean question the moment the
+   * routings end in different places.
+   */
+  usable: boolean;
+}
+
 export interface CarrierRow {
   carrier: string;
   /**
@@ -155,7 +203,19 @@ export interface CarrierRow {
   /** Days between first and last sailing. A high count inside a short window is not coverage. */
   windowDays: number;
   corridors: number;
+  /** Ocean transit across every option this carrier offers. */
   transit: Spread;
+  /**
+   * Ocean PLUS the ground leg, per option, aggregated the same way. DESTINATION MODE ONLY.
+   *
+   * Computed per option rather than per carrier, because a carrier's options can land in different
+   * places: WHL into Savannah and into Jacksonville for one Gainesville warehouse carry different
+   * ground legs, and averaging the carrier's ocean transit first would attach one dray to a figure
+   * that already mixed both.
+   */
+  door?: Spread;
+  /** Every Last CY this carrier reaches, in destination mode. One entry in lane mode. */
+  lastCys: string[];
   pods: string[];
   nextEtd: string | null;
   /**
@@ -177,7 +237,30 @@ export interface CarrierRow {
    * Taipei, 8 sailings — runs a 20.5-day median. Booking against the 15 would be booking against
    * something that happened once.
    */
-  mainRoute: { label: string; options: number; dates: number; ts: number; median: number | null } | null;
+  mainRoute: Service | null;
+  /**
+   * EVERY routing this carrier runs, busiest first — `services[0]` IS `mainRoute`.
+   *
+   * The per-route breakdown was always computed here; it used to be thrown away except for the top
+   * entry. Keeping it is what lets the table show a carrier's whole offer.
+   */
+  services: Service[];
+  /**
+   * How many of those routings are worth quoting, and how many options they carry between them.
+   *
+   * THIS IS THE ANSWER TO "HOW MANY REAL CHANCES DOES THIS CARRIER GIVE ME". A carrier's main
+   * service being fast is one claim; having two or three routings that are all acceptable is a
+   * different and often better one, because each is another shot at getting space at a transit the
+   * customer can live with. WHL on Laem Chabang -> Los Angeles/Long Beach runs Taipei at 22 days
+   * AND Shekou at 26 against a 26-day lane: 24 options across two usable routings, where the table
+   * previously showed the Taipei line alone.
+   *
+   * It also catches the opposite case, which raw `options` cannot. WHL on Laem Chabang -> New York
+   * publishes 32 options across three routings and only ONE of them is usable — the count says it
+   * is the deepest carrier on the lane, and it has one real way plus two decoys.
+   */
+  usableServices: number;
+  usableOptions: number;
   /**
    * Last published sailing, beside the next one.
    *
@@ -211,7 +294,19 @@ export interface CarrierRow {
  * of the routing each carrier runs most. No score and no label: the carrier worth calling is the
  * one at the top, and every column that put it there is on the row.
  */
-export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
+export function carrierStats(
+  rows: Schedule[],
+  lane?: Lane,
+  /**
+   * Last CY -> its ground leg. PRESENT SWITCHES THIS INTO DESTINATION MODE.
+   *
+   * Absent, every benchmark and the sort behave exactly as they did before — which is what keeps
+   * the report strictly point-to-point while the app answers for a door. Passing it changes three
+   * things and only three: services carry a door median, the usable test measures door transit, and
+   * the sort's speed key is door rather than ocean.
+   */
+  dray?: Map<string, Dray>,
+): CarrierRow[] {
   const groups = new Map<string, Option[]>();
 
   for (const o of toOptions(inLane(rows, lane))) {
@@ -245,27 +340,45 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
     //
     // Ties break toward the shallower routing, then the faster median: offered equally often, a
     // direct is the truer description of a carrier than a transship.
+    // KEYED ON THE CHAIN *AND* THE LAST CY. A chain ends at the discharge port, so one carrier
+    // discharging at Savannah for a Savannah Last CY and for an Atlanta ramp publishes the same
+    // chain twice — one service on paper, two entirely different moves at the far end. Constant
+    // within a POL -> Last CY lane, so this changes nothing there.
     const byRoute = new Map<string, Option[]>();
     for (const o of group) {
-      const b = byRoute.get(o.chain);
+      const k = `${o.chain} ${o.lastCy}`;
+      const b = byRoute.get(k);
       if (b) b.push(o);
-      else byRoute.set(o.chain, [o]);
+      else byRoute.set(k, [o]);
     }
-    const mainRoute =
-      [...byRoute.entries()]
-        .map(([label, os]) => ({
-          label,
+    //
+    // THE WHOLE RANKING IS KEPT NOW, not just its head. `mainRoute` is `services[0]`, so nothing
+    // about the headline changes — but a carrier that runs three acceptable routings stops being
+    // described by one of them. `usable` is filled in below, once the lane median exists.
+    const services: Service[] = [...byRoute.values()]
+      .map((os) => {
+        const leg = dray?.get(os[0].lastCy);
+        const median = spreadOf(os.map((o) => o.transit)).median;
+        return {
+          label: os[0].chain,
+          lastCy: os[0].lastCy,
+          dray: leg,
           options: os.length,
           dates: new Set(os.map((o) => o.date)).size,
           ts: Math.min(...os.map((o) => o.ts)),
-          median: spreadOf(os.map((o) => o.transit)).median,
-        }))
-        .sort(
-          (a, b) =>
-            b.options - a.options ||
-            a.ts - b.ts ||
-            (a.median ?? Infinity) - (b.median ?? Infinity),
-        )[0] ?? null;
+          median,
+          // Undefined rather than null in lane mode: there is no ground leg to know, which is a
+          // different statement from "the ground leg is unknown".
+          doorMedian: dray ? doorTransit(median, leg) : undefined,
+          usable: false,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.options - a.options ||
+          a.ts - b.ts ||
+          (a.median ?? Infinity) - (b.median ?? Infinity),
+      );
 
     drafts.push({
       carrier,
@@ -277,19 +390,50 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
       windowDays: dates.length > 1 ? daysBetween(dates[0], dates[dates.length - 1]) : 0,
       corridors: byRoute.size,
       transit: spreadOf(group.map((o) => o.transit)),
+      door: dray
+        ? spreadOf(group.map((o) => doorTransit(o.transit, dray.get(o.lastCy))))
+        : undefined,
+      lastCys: [...new Set(group.map((o) => o.lastCy))].sort(),
       pods: [...new Set(group.map((o) => o.pod))].sort(),
       nextEtd: dates[0] ?? null,
       lastEtd: dates[dates.length - 1] ?? null,
       avgTs: Math.round((group.reduce((n, o) => n + o.ts, 0) / group.length) * 100) / 100,
-      mainRoute,
+      mainRoute: services[0] ?? null,
+      services,
+      // Both filled in by the second pass; there is no lane median to judge against yet.
+      usableServices: 0,
+      usableOptions: 0,
       directUnknown: directOptions === 0,
     });
   }
 
+  // THE FIGURE EVERYTHING IS JUDGED ON: door transit when the ground leg is known, ocean otherwise.
+  //
+  // This is the whole of the destination-mode change. Scoped to a POL -> Last CY lane every carrier
+  // ends in the same place, so ocean transit is a fair comparison and door would be ocean plus a
+  // constant. Scoped to a DESTINATION they end in different places — Jacksonville is 84 road miles
+  // from a Gainesville warehouse and Savannah is 210 — and comparing ocean legs then measures
+  // different journeys. The same objection the file already raises against comparing on POD.
+  const speed = (d: Draft) => (dray ? (d.door?.median ?? null) : d.transit.median);
+  const serviceSpeed = (s: Service) => (dray ? (s.doorMedian ?? null) : s.median);
+
+  /**
+   * The shortest ground leg this carrier can put the box on, in road miles.
+   *
+   * The SHORTEST rather than the main service's, because it is the best ground outcome the carrier
+   * can actually offer — if a carrier reaches both Jacksonville and Savannah for a Gainesville
+   * warehouse, the Jacksonville option is the one that decides what its drayage costs. Only usable
+   * services count: a cheap dray off a routing nobody would book is not an advantage.
+   */
+  const drayMilesOf = (d: Draft) => {
+    const legs = d.services.filter((s) => s.usable && s.dray).map((s) => s.dray!.miles);
+    return legs.length ? Math.min(...legs) : LAST;
+  };
+
   // The lane's own median carrier is the benchmark, not an absolute day count: 30 days is good on
   // one lane and poor on another, and the team is choosing between these carriers, not all lanes.
   const medians = drafts
-    .map((d) => d.transit.median)
+    .map(speed)
     .filter((m): m is number => m != null)
     .sort((a, b) => a - b);
   const laneMedian = medians.length
@@ -298,10 +442,42 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
       : medians[(medians.length - 1) / 2]
     : null;
 
-  const vsLane = (d: Draft) =>
-    d.transit.median != null && laneMedian != null
-      ? Math.round((d.transit.median - laneMedian) * 10) / 10
-      : null;
+  const vsLane = (d: Draft) => {
+    const v = speed(d);
+    return v != null && laneMedian != null ? Math.round((v - laneMedian) * 10) / 10 : null;
+  };
+
+  // ONE MARGIN, ONE MEANING: 10% of the lane median is the smallest difference worth acting on.
+  //
+  // It is already the threshold that decides whether a thin carrier is *materially* faster (see the
+  // sort below). Turning it around gives the definition of a usable service for free — a routing
+  // within the margin is not materially SLOWER than typical, so it is one a customer can live with.
+  // Inventing a second, differently-calibrated tolerance for the same judgment would be two numbers
+  // that have to be kept in agreement by hand.
+  const MATERIAL_GAIN = 0.1;
+
+  // SECOND PASS: which of each carrier's routings are worth quoting.
+  //
+  // Deferred to here because the benchmark is the lane, and the lane is not known until every
+  // carrier on it has been summarised. Mutating the `Service` objects in place keeps `mainRoute`
+  // and `services[0]` the same object rather than two copies that could drift.
+  const usableCeiling = laneMedian != null ? laneMedian * (1 + MATERIAL_GAIN) : null;
+  for (const d of drafts) {
+    for (const s of d.services) {
+      // No lane median means no carrier published a transit at all. There is nothing to fail
+      // against, so nothing is disqualified — the alternative would blank the whole lane and read
+      // as "no carrier here is any good" when the truth is "no transit was published".
+      //
+      // A service with no median of its own IS disqualified, on the standing rule that a carrier
+      // which has published no transit is not a fast one. It cannot be verified, so it is not
+      // offered as a chance. In destination mode an unresolved ground leg disqualifies it for the
+      // same reason — an unknown drayage is not a short one.
+      const v = serviceSpeed(s);
+      s.usable = usableCeiling == null ? true : v != null && v <= usableCeiling;
+    }
+    d.usableServices = d.services.filter((s) => s.usable).length;
+    d.usableOptions = d.services.reduce((n, s) => n + (s.usable ? s.options : 0), 0);
+  }
 
   // THE SORT IS THE ARGUMENT.
   //
@@ -327,18 +503,23 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
   // RFQ costs nothing (it is a rate request, not a booking), so a candidate that good has to
   // surface and let the reader weigh its 4 dates for themselves.
   //
-  // The margin is relative, not absolute: 10% of the lane median. It clears EMC's 18% while still
-  // catching the case the rule was built for — 29 days against a 30-day lane is 3%, and stays
-  // demoted.
-  // SAMPLE SIZE IS MEASURED IN OPTIONS, because options are what the median is now computed over
-  // — the guard and the statistic it guards have to count the same thing.
-  const mostOptions = Math.max(0, ...drafts.map((d) => d.options));
-  const MATERIAL_GAIN = 0.1;
+  // The margin is relative, not absolute: 10% of the lane median (`MATERIAL_GAIN`, above). It
+  // clears EMC's 18% while still catching the case the rule was built for — 29 days against a
+  // 30-day lane is 3%, and stays demoted.
+  //
+  // SAMPLE SIZE IS MEASURED IN USABLE OPTIONS. It counted options, which was already better than
+  // dates — the guard and the statistic it guards have to count the same population — but raw
+  // options are inflatable by publishing breadth, and the guard was the thing being fooled. WHL on
+  // Laem Chabang -> New York publishes 32 options across three routings, and against that lane's
+  // 41-day median only ONE of them is usable — a raw count sizes it as the deepest carrier there
+  // when it is one real service plus two decoys. Counting only what is worth quoting sizes a
+  // carrier by what it can actually deliver.
+  const mostUsableOptions = Math.max(0, ...drafts.map((d) => d.usableOptions));
   const materiallyFaster = (d: Draft) => {
     const v = vsLane(d);
     return v != null && laneMedian != null && laneMedian > 0 && -v / laneMedian >= MATERIAL_GAIN;
   };
-  const thin = (d: Draft) => d.options < mostOptions * 0.25 && !materiallyFaster(d);
+  const thin = (d: Draft) => d.usableOptions < mostUsableOptions * 0.25 && !materiallyFaster(d);
 
   // Only then speed, and by the carrier's OVERALL median rather than its main service — the
   // overall figure covers everything it runs, where a main-service median can rest on a handful.
@@ -353,7 +534,22 @@ export function carrierStats(rows: Schedule[], lane?: Lane): CarrierRow[] {
         b.directOptions - a.directOptions ||
         a.avgTs - b.avgTs ||
         Number(thin(a)) - Number(thin(b)) ||
-        (a.transit.median ?? Infinity) - (b.transit.median ?? Infinity) ||
+        // MORE USABLE ROUTINGS BREAKS THE TIE, ahead of raw speed. Two carriers alike on
+        // directness and depth are not alike if one has a single acceptable routing and the other
+        // has three: each extra routing is another chance at space at a transit that still works.
+        // It sits below the thin guard on purpose — depth is a reason to prefer a carrier, not a
+        // reason to promote one whose service is too small to rely on.
+        b.usableServices - a.usableServices ||
+        // DOOR TRANSIT IN DESTINATION MODE, ocean in lane mode. `speed` is the only difference.
+        //
+        // LAST rather than Infinity for the null case: two carriers that both published no transit
+        // would make `Infinity - Infinity` NaN, and a comparator returning NaN leaves the order
+        // undefined rather than tied. Reachable — a carrier can publish departures with no arrival.
+        (speed(a) ?? LAST) - (speed(b) ?? LAST) ||
+        // Then the shorter ground leg. Two carriers at the same door transit are not the same
+        // proposition if one drays 84 miles and the other 210 — the days band equal while the cost
+        // does not, and that is the whole reason the miles stay on the row.
+        drayMilesOf(a) - drayMilesOf(b) ||
         b.options - a.options ||
         a.carrier.localeCompare(b.carrier),
     );
@@ -406,6 +602,12 @@ const inLane = (rows: Schedule[], lane?: Lane) =>
         (r) => samePlace(r.port_of_loading, lane.pol) && samePlace(r.last_cy, lane.lastCy),
       )
     : rows;
+
+/**
+ * Sorts-last sentinel for comparators. FINITE ON PURPOSE — `Infinity - Infinity` is NaN, and a
+ * comparator that returns NaN produces an undefined order rather than a tie.
+ */
+const LAST = Number.MAX_SAFE_INTEGER;
 
 const daysBetween = (a: string, b: string) =>
   Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86_400_000);
