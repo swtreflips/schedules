@@ -82,6 +82,25 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   check("direct outranks a faster transshipped service", order(rows)[0], "FEW_DIRECT");
 }
 
+// ── A MATERIALLY FASTER CARRIER WINS BEFORE ROUTING DEPTH IS CONSIDERED ──────────────
+//
+// `avgTs` used to sit above transit unconditionally, and it was expensive. Measured across 43
+// lanes it decided the top row on only four of them, yet produced 21 adjacent pairs where the
+// higher-ranked carrier was the SLOWER one — worst of them Puerto Quetzal -> Los Angeles/Long
+// Beach, ranking COS at 69 days above MSC at 23.5 because COS transships once and MSC twice.
+//
+// Forty-five days to avoid one hand-off is not a trade anyone makes. Shaped from those numbers.
+{
+  const rows = [
+    ...svc("SHALLOW", 6, 69, ["A"], "POD", 1),
+    ...svc("FAST", 6, 23.5, ["A", "B"], "POD", 2),
+  ];
+  const cs = carrierStats(rows, LANE);
+  check("the far faster carrier leads despite the extra hand-off", cs.map((c) => c.carrier), ["FAST", "SHALLOW"]);
+  check("...it really does transship more", cs.map((c) => c.avgTs), [2, 1]);
+  check("...and really is faster", cs.map((c) => c.transit.median), [23.5, 69]);
+}
+
 // ── THEN THE SHALLOWEST ROUTING ──────────────────────────────────────────────────────
 // Average transshipments separates a carrier that always runs one hand-off from one that runs
 // two. On the real lane it alone splits WHL (1.00 TS, 25.5-day median) from HPL (2.00, 42.0).

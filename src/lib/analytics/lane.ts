@@ -547,6 +547,22 @@ export function carrierStats(
   };
   const thin = (d: Draft) => d.usableOptions < mostUsableOptions * 0.25 && !materiallyFaster(d);
 
+  /**
+   * Negative when `a` is materially faster than `b`, positive when `b` is, zero when they are close.
+   *
+   * The SAME margin as everywhere else: a gap under 10% of the lane median is not worth acting on,
+   * so the keys below it get to decide. A gap over it is, so nothing below gets a say.
+   *
+   * Measured against the lane rather than against each other, because 3 days is a lot on a 20-day
+   * lane and noise on a 70-day one — the same reason `vsLaneMedian` exists.
+   */
+  const materialSpeedGap = (a: Draft, b: Draft) => {
+    const va = speed(a);
+    const vb = speed(b);
+    if (va == null || vb == null || laneMedian == null || laneMedian <= 0) return 0;
+    return Math.abs(va - vb) / laneMedian >= MATERIAL_GAIN ? va - vb : 0;
+  };
+
   // Only then speed, and by the carrier's OVERALL median rather than its main service — the
   // overall figure covers everything it runs, where a main-service median can rest on a handful.
   // The main-service figure stays a COLUMN: what a carrier runs most is worth seeing, it is just
@@ -558,13 +574,22 @@ export function carrierStats(
     .sort(
       (a, b) =>
         b.directOptions - a.directOptions ||
+        // A MATERIALLY FASTER CARRIER WINS OUTRIGHT, before routing depth is considered at all.
+        //
+        // `avgTs` used to sit here unconditionally, and it was expensive. It decides the top row on
+        // only 4 of 43 lanes, but it produced 21 adjacent pairs where the higher-ranked carrier was
+        // the SLOWER one — worst of them, Puerto Quetzal -> Los Angeles/Long Beach ranking COS at 69
+        // days above MSC at 23.5 because COS transships once and MSC twice. Forty-five days given up
+        // to avoid one hand-off is not a trade anyone would make.
+        //
+        // Every other threshold in this file asks whether a difference is worth acting on —
+        // MATERIAL_GAIN, the thin exemption, the usable margin. This one did not, so a 0.4 difference
+        // in average transshipments outranked six weeks of sailing. It now asks the same question:
+        // if the transit gap clears the margin, transit decides; inside the margin, the shallower
+        // routing still wins, which is the case `avgTs` was put here for.
+        materialSpeedGap(a, b) ||
         a.avgTs - b.avgTs ||
         Number(thin(a)) - Number(thin(b)) ||
-        // MORE USABLE ROUTINGS BREAKS THE TIE, ahead of raw speed. Two carriers alike on
-        // directness and depth are not alike if one has a single acceptable routing and the other
-        // has three: each extra routing is another chance at space at a transit that still works.
-        // It sits below the thin guard on purpose — depth is a reason to prefer a carrier, not a
-        // reason to promote one whose service is too small to rely on.
         // SPEED, THEN DEPTH — and it used to be the other way round.
         //
         // Usable ROUTINGS led, on the argument that each extra one is another chance at space. The
