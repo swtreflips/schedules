@@ -2,49 +2,35 @@ import type { Schedule } from "../../types/schedule";
 import { carrierStats, lanesIn, type CarrierRow } from "../analytics/lane";
 
 /**
- * The weekly report model — everything the email says, with no HTML in sight.
+ * The report model — everything the document says, with no HTML in sight.
  *
- * BUILT FROM `carrierStats`, NOT FROM ITS OWN QUERY. The report and the screen have to agree; a
- * Monday email that quietly contradicts the tool it is advertising is worse than no email. Deriving
- * both from the same function makes that agreement structural rather than a thing to remember —
- * change the ranking rules and the report moves with them.
+ * IT IS THE APP'S FIRST TABLE, ONE PORT PAIR AT A TIME. Nothing else. The reader skims the tables
+ * and reaches their own conclusions; the report does not reach any for them.
  *
- * Pure: `Schedule[]` in, plain objects out. The renderer takes it from here.
+ * THAT IS A DELIBERATE RETREAT FROM WHAT THIS USED TO BE. It carried a "where carrier choice matters
+ * most" board ranking lanes by what picking the right carrier was worth, a per-load-port summary
+ * board, and a single-carrier appendix. Every one of them was the report drawing a conclusion and
+ * asking to be trusted on it — and a summary that disagrees with the table two inches below it is
+ * worse than no summary. The tables already carry the argument in their ordering, which is the same
+ * reason `lane.ts` refuses to print a score or a tier label.
+ *
+ * WHAT MAKES IT DIFFERENT FROM THE SCREEN is the frame, not the depth: POL -> Last CY, strictly, so
+ * every carrier in a table ends in the same place and no drayage needs telling apart. The screen
+ * asks how a DESTINATION is served and folds several Last CYs into one answer; this asks who is good
+ * on one port pair. Both are useful and neither substitutes for the other.
+ *
+ * BUILT FROM `carrierStats`, NOT FROM ITS OWN QUERY, so the report and the screen cannot disagree
+ * about a ranking. Pure: `Schedule[]` in, plain objects out.
  */
 
-export interface BoardRow {
-  pol: string;
-  destination: string;
-  carriers: number;
-  /** Quotable options on the lane: one chain, one day, one carrier. */
-  options: number;
-  /** How many carriers offer at least one direct sailing. Zero is a meaningful answer. */
-  carriersWithDirect: number;
-  best: { carrier: string; median: number } | null;
-  laneMedian: number | null;
-  /**
-   * Lane median minus the best carrier's median: what picking the right carrier is worth, in days.
-   *
-   * This is the number the email exists to deliver. Measured, Mundra -> New York runs 26.0 against
-   * a 45.5-day lane — nineteen and a half days between the best option and a typical one — while
-   * Hai Phong -> Phoenix has a single carrier and no decision to make at all. One of those lanes
-   * deserves an RFQ conversation and the other does not, and nothing else on the row says which.
-   */
-  edge: number | null;
-}
-
-/**
- * A lane's full carrier ranking — the app's first table, carried into the email.
- *
- * The board says a lane is worth a conversation; this says who to have it with. It is the whole
- * point of the report for the person reading it on a Monday, and it is deliberately limited to the
- * `attention` lanes: a carrier table for all 54 lanes is roughly 7,000 cells, and Gmail clips a
- * message near 102 KB.
- */
 export interface LaneTable {
   pol: string;
   destination: string;
+  /** Median of the carrier medians on this lane — what `vs lane` on each row is measured against. */
   laneMedian: number | null;
+  /** Quotable options across every carrier here. */
+  options: number;
+  /** Ranked exactly as the screen ranks them. */
   carriers: CarrierRow[];
 }
 
@@ -53,14 +39,16 @@ export interface WeeklyReport {
   generatedOn: string;
   snapshotAt: string | null;
   coverage: { carriers: number; lanes: number; sailings: number; pols: number };
-  /** Lanes where carrier choice is worth the most days. The section that earns the open. */
-  attention: BoardRow[];
-  /** One per `attention` lane, in the same order. */
-  laneTables: LaneTable[];
-  /** Every lane with a real choice, grouped by port of loading. */
-  byPol: Array<{ pol: string; rows: BoardRow[] }>;
-  /** One carrier, no decision — kept for completeness, out of the way of the board. */
-  singleCarrier: BoardRow[];
+  /**
+   * Every port pair in the snapshot, grouped by load port.
+   *
+   * INCLUDING THE ONES WITH A SINGLE CARRIER. They used to be filtered into an appendix on the
+   * grounds that there is no decision to make on them — but the reader is the one who decides that,
+   * and a lane silently missing from a report reads as no service rather than as one carrier.
+   */
+  lanes: LaneTable[];
+  /** Per carrier, when it was last scraped — the Scraped column. */
+  scrapedByCarrier: Map<string, string>;
 }
 
 /** dd.mm.yyyy — the format already in use for these subject lines. */
@@ -69,119 +57,63 @@ export function reportDate(d = new Date()): string {
   return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
 }
 
-const ATTENTION_MAX = 8;
-
 export function buildWeeklyReport(
   rows: Schedule[],
   opts: { snapshotAt?: string | null; today?: Date } = {},
 ): WeeklyReport {
   const today = opts.today ?? new Date();
-  const lanes = lanesIn(rows);
 
-  const board: BoardRow[] = [];
-  // Keyed so the attention lanes can be given their carrier table without a second `carrierStats`
-  // pass — the email must not be able to rank carriers differently from the screen.
-  const statsByLane = new Map<string, CarrierRow[]>();
-  const laneKey = (pol: string, destination: string) => `${pol}\u0000${destination}`;
+  const lanes: LaneTable[] = [];
+  for (const lane of lanesIn(rows)) {
+    // NO DRAYAGE ARGUMENT. That is the whole distinction between this and the screen: inside one
+    // port pair every carrier ends in the same place, so there is no ground leg to tell apart and
+    // ocean transit is a fair comparison on its own.
+    const carriers = carrierStats(rows, lane);
+    if (!carriers.length) continue;
 
-  for (const lane of lanes) {
-    const cs = carrierStats(rows, lane);
-    if (!cs.length) continue;
-    statsByLane.set(laneKey(lane.pol, lane.lastCy), cs);
-
-    const medians = cs
+    const medians = carriers
       .map((c) => c.transit.median)
       .filter((m): m is number => m != null)
       .sort((a, b) => a - b);
 
-    const laneMedian = medians.length
-      ? medians.length % 2 === 0
-        ? (medians[medians.length / 2 - 1] + medians[medians.length / 2]) / 2
-        : medians[(medians.length - 1) / 2]
-      : null;
-
-    // Fastest by median, not by best case — a single lucky sailing is not an option to quote on.
-    const fastest = cs
-      .filter((c) => c.transit.median != null)
-      .sort((a, b) => (a.transit.median ?? 0) - (b.transit.median ?? 0))[0];
-
-    const best = fastest ? { carrier: fastest.carrier, median: fastest.transit.median as number } : null;
-
-    board.push({
+    lanes.push({
       pol: lane.pol,
       destination: lane.lastCy,
-      carriers: cs.length,
-      options: cs.reduce((n, c) => n + c.options, 0),
-      carriersWithDirect: cs.filter((c) => c.directOptions > 0).length,
-      best,
-      laneMedian,
-      edge:
-        best && laneMedian != null ? Math.round((laneMedian - best.median) * 10) / 10 : null,
+      laneMedian: medians.length
+        ? medians.length % 2 === 0
+          ? (medians[medians.length / 2 - 1] + medians[medians.length / 2]) / 2
+          : medians[(medians.length - 1) / 2]
+        : null,
+      options: carriers.reduce((n, c) => n + c.options, 0),
+      carriers,
     });
   }
 
-  // A lane with one carrier has no edge to speak of — the "best" and the "median" are the same
-  // row. Keeping those out of the board and the attention list is not tidying: an edge of 0 there
-  // means "no choice exists", while an edge of 0 on a ten-carrier lane means "every carrier is
-  // equivalent", and letting the two share a column would make both unreadable.
-  const singleCarrier = board.filter((b) => b.carriers < 2);
-  const withChoice = board.filter((b) => b.carriers >= 2);
+  // Grouped by load port, busiest lane first inside each. A reader looking for one origin finds its
+  // lanes together, and the lane they are most likely to care about is the first one there.
+  lanes.sort((a, b) => a.pol.localeCompare(b.pol) || b.options - a.options || a.destination.localeCompare(b.destination));
 
-  const byPolMap = new Map<string, BoardRow[]>();
-  for (const b of withChoice) {
-    const bucket = byPolMap.get(b.pol);
-    if (bucket) bucket.push(b);
-    else byPolMap.set(b.pol, [b]);
+  // Derived here rather than plumbed in: `schedules_latest_secure` carries `query_date` and the
+  // snapshot query already selects it, so the freshness of a carrier travels with its rows.
+  const scrapedByCarrier = new Map<string, string>();
+  for (const r of rows) {
+    const q = r.query_date;
+    if (!q) continue;
+    const prev = scrapedByCarrier.get(r.carrier_code);
+    if (!prev || q > prev) scrapedByCarrier.set(r.carrier_code, q);
   }
 
-  const byPol = [...byPolMap.entries()]
-    .map(([pol, rs]) => ({
-      pol,
-      rows: rs.sort((a, b) => b.options - a.options || a.destination.localeCompare(b.destination)),
-    }))
-    .sort((a, b) => a.pol.localeCompare(b.pol));
-
-  const attention = [...withChoice]
-    .filter((b) => b.edge != null && b.edge > 0)
-    .sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0))
-    .slice(0, ATTENTION_MAX);
-
-  // EVERY LANE GETS ITS CARRIER TABLE, attention lanes first.
-  //
-  // This used to be the attention list alone, capped at eight, because the report existed to be
-  // pasted into Outlook and Gmail clips near 102 KB. That constraint did not disappear — it moved.
-  // The report is now generated as a FILE, where being complete matters more than being small, and
-  // the renderer keeps the byte budget only for the copy-to-clipboard path.
-  //
-  // Attention-first so the lanes where carrier choice is worth the most days are the ones you meet
-  // without scrolling; the rest follow in the board's own order, busiest first.
-  const attentionKeys = new Set(attention.map((b) => laneKey(b.pol, b.destination)));
-  const rest = withChoice
-    .filter((b) => !attentionKeys.has(laneKey(b.pol, b.destination)))
-    .sort((a, b) => b.options - a.options || a.pol.localeCompare(b.pol));
-
-  const laneTables: LaneTable[] = [...attention, ...rest].map((b) => ({
-    pol: b.pol,
-    destination: b.destination,
-    laneMedian: b.laneMedian,
-    carriers: statsByLane.get(laneKey(b.pol, b.destination)) ?? [],
-  }));
-
   return {
-    subject: `Weekly Ocean Schedule Report — ${reportDate(today)}`,
+    subject: `Ocean Schedule Report — ${reportDate(today)}`,
     generatedOn: reportDate(today),
     snapshotAt: opts.snapshotAt ?? null,
     coverage: {
       carriers: new Set(rows.map((r) => r.carrier_code)).size,
-      lanes: board.length,
+      lanes: lanes.length,
       sailings: lanes.reduce((n, l) => n + l.options, 0),
-      pols: new Set(board.map((b) => b.pol)).size,
+      pols: new Set(lanes.map((l) => l.pol)).size,
     },
-    attention,
-    laneTables,
-    byPol,
-    singleCarrier: singleCarrier.sort(
-      (a, b) => a.pol.localeCompare(b.pol) || a.destination.localeCompare(b.destination),
-    ),
+    lanes,
+    scrapedByCarrier,
   };
 }

@@ -52,7 +52,7 @@ Everything in this document is phase 1 unless explicitly marked.
 | View A — corridor **list** | **shipped** | `corridorStats()` |
 | View B — carrier comparison, per lane | **shipped** | `carrierStats()` |
 | Lane verdict banner | **shipped** | `src/lib/analytics/rfq.ts` |
-| Weekly email report | **shipped** (not in the original scope) | `src/lib/report/` |
+| Port-pair report (`Generate report`) | **shipped** (not in the original scope) | `src/lib/report/` |
 | Carrier staleness per carrier | **shipped** | `scrapedByCarrier` |
 | **View C — carrier profile across lanes** | **not built** | — |
 | **Peer delta / self-relative baseline** | **not built** | — |
@@ -360,6 +360,17 @@ The app reads the search (`nearby_schedules` already returns every Last CY insid
 PostGIS `st_dwithin` on `last_cy_geom`); the report reads the whole market and keeps the strict
 comparison. Both are useful and neither replaces the other: the app answers *"how do I get my box to
 this warehouse"*, the report answers *"who is good on this port pair"*.
+
+**The report is the app's first table, once per port pair, and nothing else.** It carried a "where
+carrier choice matters most" board, a per-load-port summary and a single-carrier appendix, and all
+three are gone. Each was the report reaching a conclusion and asking to be trusted on it — and a
+summary that disagrees with the table two inches below it is worse than no summary. The tables
+already carry the argument in their ordering, which is the same reason `lane.ts` refuses to print a
+score or a tier label. Every port pair gets a table including the single-carrier ones: a lane missing
+from a report reads as *no service* rather than as *one carrier*.
+
+Measured: 73 port pairs, 856 KB as a download. The clipboard flavour keeps a byte budget because
+Gmail clips near 102 KB, and says how many pairs it dropped.
 
 ### Last CY becomes part of the option
 

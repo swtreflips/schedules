@@ -58,7 +58,7 @@ export function ReportButton() {
     try {
       const { report, html } = await build(true);
       download(html, report.subject);
-      flash("downloaded", `${report.laneTables.length} lanes`);
+      flash("downloaded", `${report.lanes.length} port pairs`);
     } catch (e) {
       flash("failed", (e as Error).message);
     }

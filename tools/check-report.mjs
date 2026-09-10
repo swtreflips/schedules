@@ -80,42 +80,51 @@ const report = buildWeeklyReport(MARKET, { snapshotAt: "2026-08-31T06:35:09Z", t
 const html = renderEmailHtml(report);
 
 // ── THE SUBJECT, IN THE FORMAT ALREADY IN USE ────────────────────────────────────────
-check("subject carries a dd.mm.yyyy date", report.subject, "Weekly Ocean Schedule Report — 01.09.2026");
+check("subject carries a dd.mm.yyyy date", report.subject, "Ocean Schedule Report — 01.09.2026");
 check("date helper pads single digits", reportDate(new Date(2026, 0, 5)), "05.01.2026");
 
-// ── EDGE: WHAT PICKING THE RIGHT CARRIER IS WORTH ────────────────────────────────────
-// Three carriers at 20 / 35 / 50 put the lane median at 35 and the best at 20, so choosing well
-// is worth 15 days. Two carriers both at 30 means the choice is worth nothing, and the report has
-// to say so rather than imply an advantage that is not there.
+// ── EVERY PORT PAIR GETS A TABLE, AND THE DOCUMENT IS NOTHING ELSE ───────────────────
+//
+// The report used to lead with a board ranking lanes by what picking the right carrier was worth,
+// then a per-load-port board, then a single-carrier appendix. All three were the report drawing a
+// conclusion and asking to be trusted on it. They are gone: the tables carry the argument in their
+// ordering, which is the same reason lane.ts refuses to print a score or a tier label.
 {
-  const big = report.byPol.flatMap((g) => g.rows).find((r) => r.destination === "BIG_CHOICE");
-  const flat = report.byPol.flatMap((g) => g.rows).find((r) => r.destination === "NO_SPREAD");
-  check("best carrier is the fastest by median", [big.best.carrier, big.best.median], ["FAST", 20]);
-  check("edge is lane median minus best", big.edge, 15);
-  check("a lane where every carrier is alike has no edge", flat.edge, 0);
-  check("...and is not in the attention list", report.attention.some((r) => r.destination === "NO_SPREAD"), false);
-  check("the lane with a real edge is", report.attention[0].destination, "BIG_CHOICE");
-}
+  check("one entry per port pair", report.lanes.map((l) => l.destination).sort(), ["BIG_CHOICE", "NO_SPREAD", "ONLY_ONE"]);
 
-// ── SINGLE-CARRIER LANES ARE SEPARATED ───────────────────────────────────────────────
-// An edge of 0 on a ten-carrier lane means "every carrier is equivalent"; on a one-carrier lane it
-// means "there is no choice". Sharing a column would make both unreadable.
-{
-  check("single-carrier lane is set aside", report.singleCarrier.map((r) => r.destination), ["ONLY_ONE"]);
-  check("...and kept out of the board", report.byPol.flatMap((g) => g.rows).some((r) => r.destination === "ONLY_ONE"), false);
-  check("...and out of the attention list", report.attention.some((r) => r.destination === "ONLY_ONE"), false);
+  // A LANE WITH ONE CARRIER IS STILL A LANE. It used to be filtered into an appendix on the grounds
+  // that there is no decision to make on it — but a lane missing from a report reads as no service
+  // rather than as one carrier, and the reader is the one who decides whether it matters.
+  const solo = report.lanes.find((l) => l.destination === "ONLY_ONE");
+  check("a single-carrier lane still gets its table", solo.carriers.length, 1);
+  check("...and appears in the rendered document", html.includes("ONLY_ONE"), true);
+
+  check("no lane board", html.includes("Where carrier choice matters most"), false);
+  check("...and no 'who to ask' section", html.includes("Who to ask"), false);
+  check("...and no single-carrier appendix", html.includes("no choice to make"), false);
 }
 
 // ── THE REPORT AGREES WITH THE SCREEN ────────────────────────────────────────────────
-// Both are derived from carrierStats. A Monday email that quietly contradicts the tool it is
-// advertising is worse than no email.
+// Both are derived from carrierStats, so the ranking cannot drift between them. A report that
+// quietly contradicts the tool it came from is worse than no report.
 {
-  const lane = { pol: "POL_A", lastCy: "BIG_CHOICE" };
-  const onScreen = carrierStats(MARKET, lane);
-  const inReport = report.byPol.flatMap((g) => g.rows).find((r) => r.destination === "BIG_CHOICE");
-  check("carrier count matches the view", inReport.carriers, onScreen.length);
-  const fastestOnScreen = [...onScreen].sort((a, b) => a.transit.median - b.transit.median)[0];
-  check("best carrier matches the view", inReport.best.carrier, fastestOnScreen.carrier);
+  const onScreen = carrierStats(MARKET, { pol: "POL_A", lastCy: "BIG_CHOICE" });
+  const inReport = report.lanes.find((l) => l.destination === "BIG_CHOICE");
+  check("carrier count matches the view", inReport.carriers.length, onScreen.length);
+  check("...and so does the ORDER", inReport.carriers.map((c) => c.carrier), onScreen.map((c) => c.carrier));
+  check("lane median is the median of the carrier medians", inReport.laneMedian, 35);
+}
+
+// ── THE FULL CARRIER TABLE, NOT A SUMMARY OF IT ──────────────────────────────────────
+// The whole point of the change: the report shows what the screen shows, one port pair at a time.
+{
+  for (const col of ["Direct", "1 TS", "2+ TS", "Options", "Dates", "Avg TS", "Main services",
+                     "Service median", "Ocean", "Spread", "vs lane", "Sailing window", "Scraped"])
+    check(`the table carries "${col}"`, html.includes(col), true);
+  // Drayage is the one column that must NOT be here — inside a port pair every carrier ends in the
+  // same place, so there is no ground leg to tell apart.
+  check("...but not Drayage distance", html.includes("Drayage"), false);
+  check("...nor Door", html.includes(">Door<"), false);
 }
 
 // ── OUTLOOK SAFETY, ASSERTED RATHER THAN EYEBALLED ───────────────────────────────────
@@ -134,7 +143,7 @@ check("date helper pads single digits", reportDate(new Date(2026, 0, 5)), "05.01
 // something is being embedded that should not be.
 {
   check("fixture report is small", html.length < 100 * 1024, true);
-  check("plain-text fallback exists", renderEmailText(report).includes("WHERE CARRIER CHOICE MATTERS MOST"), true);
+  check("plain-text fallback exists", renderEmailText(report).includes("POL_A — BIG_CHOICE"), true);
 }
 
 // ── TWO OUTPUTS, ONE RENDERER ────────────────────────────────────────────────────────
@@ -143,15 +152,15 @@ check("date helper pads single digits", reportDate(new Date(2026, 0, 5)), "05.01
 // reader scrolls and completeness is the point. "Copy" puts the report in an Outlook message body,
 // where Gmail clips near 102 KB — so that one is budgeted, and says so when it trims.
 //
-// Measured on the live market: 51 lane tables at 375 KB full, against 6 tables at 98 KB copied.
+// Measured on the live market: 73 port pairs full, against a handful in the clipboard flavour.
 {
-  // Only a lane HEADING carries a figure after the phrase; the legend uses it twice as prose.
+  // Only a lane HEADING carries a figure after the phrase; the legend uses it once as prose.
   const tables = (h) => (h.match(/lane median [0-9]/g) ?? []).length;
 
   // A MARKET BIG ENOUGH FOR THE BUDGET TO BITE. The small fixture above renders well under 102 KB
   // either way, so `full` and `!full` produce the same document and a test on it proves nothing —
   // verified by flipping the flag off and watching every assertion still pass. Sixty lanes of eight
-  // carriers is the shape of the live market (73 lanes, 51 with a choice).
+  // carriers is roughly the shape of the live market.
   const BIG = [];
   for (let lane = 0; lane < 60; lane += 1)
     for (const [i, carrier] of ["A", "B", "C", "D", "E", "F", "G", "H"].entries())
@@ -162,9 +171,9 @@ check("date helper pads single digits", reportDate(new Date(2026, 0, 5)), "05.01
   const budgeted = renderEmailHtml(bigReport, false);
 
   check("the big fixture really does overflow the budget", budgeted.length < full.length, true);
-  check("every lane with a choice gets a carrier table", tables(full), bigReport.laneTables.length);
-  check("...and the full render never stops short", full.includes("Showing the top"), false);
-  check("...while the budgeted one trims, and says so", budgeted.includes("Showing the top"), true);
+  check("every port pair gets a carrier table", tables(full), bigReport.lanes.length);
+  check("...and the full render never stops short", full.includes("Showing "), false);
+  check("...while the budgeted one trims, and says so", budgeted.includes("Showing "), true);
   check("...staying under Gmail's clip", budgeted.length < 102 * 1024, true);
 
   // The Word rules are not relaxed just because this path is bigger — it is still HTML someone may
@@ -181,8 +190,11 @@ check("date helper pads single digits", reportDate(new Date(2026, 0, 5)), "05.01
 // ── DEGENERATE INPUT ─────────────────────────────────────────────────────────────────
 {
   const empty = buildWeeklyReport([], { today: new Date(2026, 8, 1) });
-  check("no market does not crash", [empty.byPol.length, empty.attention.length], [0, 0]);
-  check("...and still renders", renderEmailHtml(empty).includes("Weekly Ocean Schedule Report"), true);
+  check("no market does not crash", [empty.lanes.length, empty.coverage.lanes], [0, 0]);
+  check("...and still renders", renderEmailHtml(empty).includes("Ocean Schedule Report"), true);
+  // No lanes means no tables at all. The legend still renders and still names the columns, which is
+  // why this checks for the markup rather than for the words.
+  check("...with no carrier table in it", renderEmailHtml(empty).includes("<table"), false);
 }
 
 console.log(failed ? `\n${failed} failure(s)` : "\nall checks passed");
