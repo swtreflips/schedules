@@ -61,23 +61,6 @@ const table = (inner: string) =>
 const SERVICES_SHOWN = 3;
 
 /**
- * A routing, named against the lane it is on rather than in full.
- *
- * The heading above the table already says where the box is going, so repeating the destination on
- * every line is noise — "via Taipei, Taiwan" beats "Taipei, Taiwan > Los Angeles/Long Beach, CA".
- *
- * THE FULL CHAIN SURVIVES WHEN THE DISCHARGE PORT IS NOT THE DESTINATION, because then it is not
- * repetition: an inland Last CY reached through Oakland is a materially different routing from the
- * same one through Houston, and that difference is the single biggest thing separating routings on
- * a rail lane.
- */
-function routingName(label: string, destination: string): string {
-  if (label === destination) return "direct";
-  const suffix = ` > ${destination}`;
-  return label.endsWith(suffix) ? `via ${label.slice(0, -suffix.length)}` : label;
-}
-
-/**
  * Which routings a row shows — the same selection the screen makes, so the two agree.
  *
  * A CARRIER ALWAYS NAMES WHAT IT RUNS, even when none of it clears the margin. Printing "nothing
@@ -96,28 +79,62 @@ function shownServices(c: CarrierRow) {
   };
 }
 
-/** The routings, stacked. `<br>` is the only line break Word obeys. */
-function servicesCell(c: CarrierRow, destination: string): string {
-  const { shown, more, notUsable, outOfReach } = shownServices(c);
+/**
+ * A stacked cell of the service block — one line per routing shown, `<br>` being the only line break
+ * Word obeys.
+ *
+ * THE SAME SPLIT THE SCREEN USES: TS ports, POD and how often each runs, under one "Main services"
+ * label, so line two of each belongs to line two of the others. One string carrying all of it cannot
+ * be compared down a column, because every line puts the parts at a different offset.
+ *
+ * WITH ONE COLUMN LEFT OUT. The screen also shows Last CY, which varies there because a destination
+ * is reached through several of them. Here the frame IS a Last CY — it is in the heading above the
+ * table, and every routing in it ends at the same one — so a Last CY column would repeat one value
+ * down the whole table. The rail tag on POD says the same thing without the noise: a discharge port
+ * marked "rail" is one the carrier moves inland from.
+ */
+function stackedCell(c: CarrierRow, render: (s: Service) => string): string {
+  const { shown, outOfReach } = shownServices(c);
+  if (!shown.length) return `<span style="color:${FAINT}">—</span>`;
+  return shown
+    .map((s) => (outOfReach ? `<span style="color:${MUTED}">${render(s)}</span>` : render(s)))
+    .join("<br>");
+}
 
+/** The hand-offs before discharge. Says "direct" rather than leaving a gap. */
+const viaCell = (c: CarrierRow) =>
+  stackedCell(c, (s) =>
+    s.via.length ? esc(s.via.join(" > ")) : `<span style="color:${MUTED}">direct</span>`,
+  );
+
+/** Where the box comes off the ship, and whether the carrier keeps going from there. */
+const podCell = (c: CarrierRow) =>
+  stackedCell(
+    c,
+    (s) =>
+      esc(s.discharge) +
+      (s.railLeg ? ` <span style="color:${ACCENT};font-size:10px">rail</span>` : ""),
+  );
+
+/** How often each routing runs, and the tail describing the stack as a whole. */
+function optionsCell(c: CarrierRow): string {
+  const { shown, more, notUsable, outOfReach } = shownServices(c);
   const lines = shown.map((s) => {
-    const body = `${esc(routingName(s.label, destination))} <span style="color:${MUTED}">×${s.options}</span>`;
+    const body = `×${s.options}`;
     return outOfReach ? `<span style="color:${MUTED}">${body}</span>` : body;
   });
-  if (!lines.length) lines.push(`<span style="color:${FAINT}">no published routing</span>`);
+  if (!lines.length) lines.push(`<span style="color:${FAINT}">none</span>`);
 
   const tail: string[] = [];
   if (outOfReach && shown.length) {
     tail.push(
-      `out of reach${c.vsLaneMedian == null ? "" : ` — ${c.vsLaneMedian > 0 ? "+" : ""}${c.vsLaneMedian}d vs the lane`}`,
+      `out of reach${c.vsLaneMedian == null ? "" : ` ${c.vsLaneMedian > 0 ? "+" : ""}${c.vsLaneMedian}d`}`,
     );
-    if (notUsable.length > 1) tail.push(`${notUsable.length - 1} other routing${notUsable.length === 2 ? "" : "s"}`);
   } else {
-    if (more > 0) tail.push(`+${more} more usable`);
+    if (more > 0) tail.push(`+${more} more`);
     if (notUsable.length > 0) tail.push(`+${notUsable.length} slower`);
   }
   if (tail.length) lines.push(`<span style="color:${FAINT};font-size:11px">${tail.join(" · ")}</span>`);
-
   return lines.join("<br>");
 }
 
@@ -133,7 +150,17 @@ function serviceMedianCell(c: CarrierRow): string {
     .join("<br>");
 }
 
+// A spacer carries no rule, or the label row would read as one long line above the headings rather
+// than as a bracket over three of them.
+const spacer = (span: number) =>
+  `<th colspan="${span}" style="padding:0;border:0"></th>`;
+
 const carrierHeader =
+  "<tr>" +
+  spacer(7) +
+  `<th colspan="3" align="center" style="padding:4px 8px 2px;border-bottom:1px solid ${RULE};font-size:10px;color:${MUTED};text-transform:uppercase;letter-spacing:.06em">Main services</th>` +
+  spacer(6) +
+  "</tr>" +
   "<tr>" +
   th("Carrier") +
   th("Direct", true) +
@@ -142,7 +169,9 @@ const carrierHeader =
   th("Options", true) +
   th("Dates", true) +
   th("Avg TS", true) +
-  th("Main services") +
+  th("TS ports") +
+  th("POD") +
+  th("Options", true) +
   th("Service median", true) +
   th("Ocean — median / range", true) +
   th("Spread", true) +
@@ -151,7 +180,7 @@ const carrierHeader =
   th("Scraped") +
   "</tr>";
 
-function carrierRow(c: CarrierRow, destination: string, scraped: string | undefined): string {
+function carrierRow(c: CarrierRow, scraped: string | undefined): string {
   const vs =
     c.vsLaneMedian == null
       ? `<span style="color:${FAINT}">—</span>`
@@ -185,7 +214,9 @@ function carrierRow(c: CarrierRow, destination: string, scraped: string | undefi
     td(`<strong>${c.options}</strong>`, true) +
     td(`<span style="color:${MUTED}">${c.sailDates}</span>`, true) +
     td(c.avgTs.toFixed(2), true) +
-    td(servicesCell(c, destination)) +
+    td(viaCell(c)) +
+    td(podCell(c)) +
+    td(optionsCell(c), true) +
     td(serviceMedianCell(c), true) +
     td(`${num(c.transit.median)}${range}`, true) +
     td(
@@ -210,7 +241,7 @@ const laneSection = (t: LaneTable, scraped: Map<string, string>) =>
   `Carriers — most direct first, then fewest transshipments` +
   (t.laneMedian == null ? "" : ` · lane median ${t.laneMedian}d`) +
   `</p>` +
-  table(carrierHeader + t.carriers.map((c) => carrierRow(c, t.destination, scraped.get(c.carrier))).join(""));
+  table(carrierHeader + t.carriers.map((c) => carrierRow(c, scraped.get(c.carrier))).join(""));
 
 /**
  * GMAIL CLIPS A MESSAGE NEAR 102 KB, and a clipped report is worse than a short one — the reader
@@ -246,8 +277,11 @@ export function renderEmailHtml(r: WeeklyReport, full = false): string {
     `several onward vessels off the same feeder are one option, not four. ` +
     `<strong>Dates</strong>: days a box can actually leave on. ` +
     `<strong>Avg TS</strong>: mean transshipments per option. ` +
-    `<strong>Main services</strong>: the routings within 10% of the lane median, busiest first, with ` +
-    `<strong>Service median</strong> beside them line for line. ` +
+    `<strong>Main services</strong>: each routing within 10% of the lane median, split into where it ` +
+    `transships, where it discharges and how often it runs, with <strong>Service median</strong> ` +
+    `beside it line for line. A discharge port marked <strong>rail</strong> is one the carrier moves ` +
+    `the box inland from — a real option, but not the one you reach for, so those sit below the ` +
+    `routings that stay on the water to the Last CY. ` +
     `<strong>Ocean</strong> is the carrier's median across everything it runs, so it matches a ` +
     `service median only when a carrier runs one service. ` +
     `<strong>Spread</strong>: slowest minus fastest. ` +
@@ -296,7 +330,13 @@ export function renderEmailText(r: WeeklyReport): string {
     for (const c of lane.carriers) {
       const { shown } = shownServices(c);
       const svc = shown.length
-        ? shown.map((s) => `${routingName(s.label, lane.destination)} x${s.options} ${num(s.median)}d`).join(" | ")
+        ? shown
+            .map(
+              (s) =>
+                `${s.via.length ? s.via.join(" > ") + " > " : ""}${s.discharge}${s.railLeg ? " (rail)" : ""}` +
+                ` x${s.options} ${num(s.median)}d`,
+            )
+            .join(" | ")
         : "no published routing";
       lines.push(
         `  ${c.carrier}: ${c.directUnknown ? "no direct" : `${c.directOptions} direct`}, ` +

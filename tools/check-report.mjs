@@ -119,12 +119,29 @@ check("date helper pads single digits", reportDate(new Date(2026, 0, 5)), "05.01
 // The whole point of the change: the report shows what the screen shows, one port pair at a time.
 {
   for (const col of ["Direct", "1 TS", "2+ TS", "Options", "Dates", "Avg TS", "Main services",
-                     "Service median", "Ocean", "Spread", "vs lane", "Sailing window", "Scraped"])
+                     "TS ports", "POD", "Service median", "Ocean", "Spread", "vs lane",
+                     "Sailing window", "Scraped"])
     check(`the table carries "${col}"`, html.includes(col), true);
-  // Drayage is the one column that must NOT be here — inside a port pair every carrier ends in the
-  // same place, so there is no ground leg to tell apart.
+
+  // TWO COLUMNS THE SCREEN HAS AND THIS MUST NOT. Drayage: inside a port pair every carrier ends in
+  // the same place, so there is no ground leg to tell apart. Last CY: it IS the frame here, named in
+  // the heading, so a column would repeat one value down the whole table.
   check("...but not Drayage distance", html.includes("Drayage"), false);
   check("...nor Door", html.includes(">Door<"), false);
+  check("...nor a Last CY column", html.includes(">Last CY<"), false);
+
+  // EVERY HEADER ROW AND EVERY BODY ROW MUST BE THE SAME WIDTH. A colSpan that disagrees with the
+  // cell count throws nothing — it silently shifts every row after it one column left.
+  const widths = new Set();
+  for (const tr of html.match(/<tr>.*?<\/tr>/g) ?? []) {
+    let n = 0;
+    for (const cell of tr.match(/<t[dh][^>]*>/g) ?? []) {
+      const cs = cell.match(/colspan="(\d+)"/i);
+      n += cs ? Number(cs[1]) : 1;
+    }
+    if (n) widths.add(n);
+  }
+  check("every row in the document is the same width", [...widths], [16]);
 }
 
 // ── OUTLOOK SAFETY, ASSERTED RATHER THAN EYEBALLED ───────────────────────────────────
