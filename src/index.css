@@ -928,6 +928,10 @@ input[type="number"] {
 /* Where the carrier hands over. Same weight as the chain it extends — it is part of the routing,
    not an annotation on it, and the mileage next to it is measured from here. */
 .an-service-cy { color: var(--color-secondary); }
+/* A routing shown for completeness rather than as a candidate — the carrier runs it, it is just
+   materially slower than the lane. Named rather than hidden: an empty cell reads as missing data. */
+.an-service--far { color: var(--color-muted); }
+.an-service--far .an-service-t { font-weight: 400; }
 
 /* The destination heading replaces the lane picker: there is nothing to choose any more, the
    search above chose it. */

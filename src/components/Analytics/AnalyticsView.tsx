@@ -73,12 +73,23 @@ const SERVICES_SHOWN = 3;
 function ServicesCell({ c }: { c: CarrierRow }) {
   const usable = c.services.filter((s) => s.usable);
   const slower = c.services.filter((s) => !s.usable);
-  const shown = usable.slice(0, SERVICES_SHOWN);
-  const rest = usable.length - shown.length;
 
-  // Spelled out rather than left blank, for the same reason Direct reads "none": an empty cell
-  // looks like missing data, and "every routing this carrier runs is materially slower than the
-  // lane" is a finding.
+  // A CARRIER ALWAYS NAMES WHAT IT RUNS, even when none of it clears the margin.
+  //
+  // This cell used to render "nothing within reach of the lane" and stop. On Cartagena ->
+  // Seymour, IN that produced an HMM row carrying 2 options, a 27.5-day median, a spread and a
+  // sailing window beside an empty services cell — and the same two Cincinnati sailings were
+  // plainly visible under Rank. It read as broken data, and it was reported as a bug, correctly:
+  // a row that shows a carrier exists and then declines to say what it does is worse than one that
+  // says "here it is, and it is eight days over the lane".
+  //
+  // So the fallback shows the carrier's best routing anyway, dimmed and labelled out of reach. The
+  // classification does not change — HMM still sorts last and still counts zero usable services —
+  // only the silence does.
+  const shown = usable.length ? usable.slice(0, SERVICES_SHOWN) : slower.slice(0, 1);
+  const rest = usable.length ? usable.length - shown.length : 0;
+  const outOfReach = usable.length === 0;
+
   const title = (list: typeof c.services) =>
     list
       .map(
@@ -91,10 +102,13 @@ function ServicesCell({ c }: { c: CarrierRow }) {
   return (
     <td className="an-services">
       {shown.length === 0 ? (
-        <span className="an-dim">nothing within reach of the lane</span>
+        <span className="an-dim">no published routing</span>
       ) : (
         shown.map((s) => (
-          <span className="an-service" key={s.label + s.lastCy}>
+          <span
+            className={"an-service" + (outOfReach ? " an-service--far" : "")}
+            key={s.label + s.lastCy}
+          >
             {s.label}
             {/* THE HAND-OVER POINT, when it is not the discharge port.
                 Measured on Nhava Sheva -> Gainesville, HPL discharges at Savannah and carries the
@@ -131,7 +145,16 @@ function ServicesCell({ c }: { c: CarrierRow }) {
           +{rest} more usable
         </span>
       )}
-      {slower.length > 0 && (
+      {/* Why the line above is greyed out, stated on the row rather than left to be inferred from
+          the vs-lane column three cells away. */}
+      {outOfReach && shown.length > 0 && (
+        <span className="an-slow an-service-more">
+          out of reach
+          {c.vsLaneMedian != null && ` — ${c.vsLaneMedian > 0 ? "+" : ""}${c.vsLaneMedian}d vs the lane`}
+          {slower.length > 1 && `, ${slower.length - 1} other routing${slower.length === 2 ? "" : "s"}`}
+        </span>
+      )}
+      {!outOfReach && slower.length > 0 && (
         <span className="an-dim an-service-more" title={title(slower)}>
           +{slower.length} slower
         </span>

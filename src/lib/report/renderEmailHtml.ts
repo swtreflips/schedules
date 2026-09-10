@@ -119,22 +119,35 @@ function routingName(label: string, destination: string): string {
 /** A carrier's usable routings, stacked inside one cell. `<br>` is the only line break Word obeys. */
 function servicesCell(c: CarrierRow, destination: string): string {
   const usable = c.services.filter((s) => s.usable);
-  const slower = c.services.length - usable.length;
-  const shown = usable.slice(0, SERVICES_SHOWN);
-  const more = usable.length - shown.length;
+  const notUsable = c.services.filter((s) => !s.usable);
 
-  const lines = shown.map(
-    (s) =>
+  // A CARRIER ALWAYS NAMES WHAT IT RUNS, even when none of it clears the margin — the same fix the
+  // on-screen cell needed. Printing "no routing within +10%" and stopping left a row with options,
+  // a median and a sailing window beside an empty cell, which reads as broken data rather than as
+  // a slow carrier. Shown dimmed and labelled instead; the ranking is unchanged.
+  const shown = usable.length ? usable.slice(0, SERVICES_SHOWN) : notUsable.slice(0, 1);
+  const more = usable.length ? usable.length - shown.length : 0;
+  const outOfReach = usable.length === 0;
+
+  const lines = shown.map((s) => {
+    const body =
       `${esc(routingName(s.label, destination))} <span style="color:${MUTED}">×${s.options}</span> ` +
-      `<strong>${num(s.median)}d</strong>`,
-  );
+      `<strong>${num(s.median)}d</strong>`;
+    return outOfReach ? `<span style="color:${MUTED}">${body}</span>` : body;
+  });
 
-  // Stated, not blank: an empty cell reads as missing data, where "nothing this carrier runs is
-  // within reach of the lane" is a finding worth putting in front of someone.
-  if (!lines.length) lines.push(`<span style="color:${FAINT}">no routing within +10%</span>`);
+  if (!lines.length) lines.push(`<span style="color:${FAINT}">no published routing</span>`);
+
   const tail: string[] = [];
-  if (more > 0) tail.push(`+${more} more usable`);
-  if (slower > 0) tail.push(`+${slower} slower`);
+  if (outOfReach && shown.length) {
+    tail.push(
+      `out of reach${c.vsLaneMedian == null ? "" : ` — ${c.vsLaneMedian > 0 ? "+" : ""}${c.vsLaneMedian}d vs the lane`}`,
+    );
+    if (notUsable.length > 1) tail.push(`${notUsable.length - 1} other routing${notUsable.length === 2 ? "" : "s"}`);
+  } else {
+    if (more > 0) tail.push(`+${more} more usable`);
+    if (notUsable.length > 0) tail.push(`+${notUsable.length} slower`);
+  }
   if (tail.length) lines.push(`<span style="color:${FAINT};font-size:11px">${tail.join(" · ")}</span>`);
 
   return lines.join("<br>");

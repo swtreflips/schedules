@@ -462,6 +462,32 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   check("...and the carrier lists both", c.lastCys, ["Jacksonville, FL", "Savannah, GA"]);
 }
 
+// A CARRIER WITH NOTHING USABLE STILL HAS SERVICES TO NAME.
+//
+// Reported as a bug from Cartagena -> Seymour, IN: HMM showed 2 options, a 27.5-day median, a
+// spread and a sailing window beside an EMPTY services cell, while Rank plainly listed its two
+// Cincinnati sailings. The classification was right — 28.5 days door against a 20-day lane is 8.5
+// over, so nothing is usable — but a row that says a carrier exists and then declines to say what
+// it runs reads as broken data.
+//
+// `usableServices` stays 0 and the carrier stays last. What must not be zero is `services`: the
+// renderer falls back to those, dimmed, so there is always something to name.
+{
+  const rows = [
+    ...svc("FAST", 8, 11, ["H"]),
+    ...svc("MID", 8, 19, ["H"], "POD", 2),
+    ...svc("SLOW", 2, 27.5, ["H"], "POD", 3),
+  ];
+  const cs = carrierStats(rows, LANE);
+  const slow = cs.find((c) => c.carrier === "SLOW");
+  check("nothing this carrier runs is usable", slow.usableServices, 0);
+  check("...it is genuinely well over the lane", slow.vsLaneMedian > 5, true);
+  check("...and it still sorts last", cs[cs.length - 1].carrier, "SLOW");
+  // The guarantee the empty cell violated: there is always a routing to fall back to.
+  check("...but its routing is still there to show", slow.services.length, 1);
+  check("...with a label, a count and a median", [slow.services[0].label, slow.services[0].options, slow.services[0].median], ["H > POD", 2, 27.5]);
+}
+
 // THE DRAY IS MEASURED FROM THE LAST CY, NOT THE DISCHARGE PORT — and they differ often.
 //
 // Measured on Nhava Sheva -> Gainesville, FL: HPL discharges at Savannah and carries the box on to
