@@ -45,10 +45,14 @@ export function App() {
   const [rows, setRows] = useState<Schedule[]>([]);
   const [status, setStatus] = useState<SearchStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // WHAT WAS ASKED, kept beside what came back. Analytics answers for the customer's door, so it
+  // needs the destination the user typed — the rows only carry the ports the box lands at.
+  const [lastSearch, setLastSearch] = useState<SearchParams | null>(null);
 
   const handleSearch = async (params: SearchParams) => {
     setStatus("loading");
     setErrorMessage(null);
+    setLastSearch(params);
     try {
       const fetched = await searchSchedules(params);
       setRows(fetched);
@@ -128,7 +132,15 @@ export function App() {
       />
 
       {viewMode === "analytics" ? (
-        <AnalyticsView />
+        // The same rows the grid gets, so the carrier filter and the cargo-ready date apply here
+        // exactly as they do to Plan and Rank — one search, three readings of it.
+        <AnalyticsView
+          rows={visibleRows}
+          destination={lastSearch?.destination ?? ""}
+          pol={lastSearch?.pol ?? ""}
+          radiusMiles={lastSearch?.radiusMiles ?? 0}
+          searching={status === "loading"}
+        />
       ) : (
         <SchedulesGrid
           viewMode={viewMode}

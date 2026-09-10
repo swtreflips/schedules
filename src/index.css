@@ -909,6 +909,31 @@ input[type="number"] {
 .an-dim { color: var(--color-faint); }
 .an-rail { font-family: var(--font-mono); font-size: 10px; color: var(--color-accent); letter-spacing: 0.04em; }
 
+/* A carrier's usable routings, stacked — busiest first, the top line being what it runs most.
+   Aligned to the top rather than the baseline the rest of the table uses: with up to three lines
+   in the cell, baseline alignment would drop the whole row to the last of them. */
+.an-table td.an-services { vertical-align: top; }
+.an-service { display: block; white-space: nowrap; }
+/* The transit trails its routing so the labels stay left-aligned and readable down the column;
+   tabular so the day counts still line up against each other. */
+.an-service-t {
+  margin-left: 8px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.an-service-more { display: block; font-size: 10px; }
+/* The ground leg trails its routing, quieter than the transit beside it — it is the cost signal,
+   not the ranking one, and the ranking one is already the Door column. */
+.an-service-dray { font-variant-numeric: tabular-nums; }
+/* Where the carrier hands over. Same weight as the chain it extends — it is part of the routing,
+   not an annotation on it, and the mileage next to it is measured from here. */
+.an-service-cy { color: var(--color-secondary); }
+
+/* The destination heading replaces the lane picker: there is nothing to choose any more, the
+   search above chose it. */
+.an-lane-title { display: flex; align-items: baseline; gap: 8px; }
+.an-lane-title strong { font-weight: 500; }
+
 .an-foot { margin-top: 10px; font-size: 11px; color: var(--color-muted); max-width: 68ch; }
 
 .an-state { padding: 24px 12px; font-family: var(--font-mono); font-size: 11.5px; color: var(--color-muted); }

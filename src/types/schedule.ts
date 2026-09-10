@@ -28,4 +28,13 @@ export interface Schedule {
   ts_vessels: string[];
   route_ports: string[];
   vessel_sequence: string[];
+  /**
+   * When this row's carrier was last scraped.
+   *
+   * OPTIONAL BECAUSE NOT EVERY QUERY ASKS FOR IT — `nearby_schedules` returns `s.*` so it is there,
+   * and the market snapshot names it explicitly. It matters because `schedules_latest_secure`
+   * applies a freshness window at query time: a carrier outside the window is ABSENT rather than
+   * stale, and silent absence looks exactly like having no service.
+   */
+  query_date?: string | null;
 }

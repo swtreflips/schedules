@@ -1,26 +1,39 @@
-import { useMemo, useState } from "react";
-import { useMarketSnapshot } from "../../state/useMarketSnapshot";
+import { useMemo } from "react";
 import {
   carrierStats,
   corridorStats,
-  lanesIn,
   type CarrierRow,
   type Lane,
 } from "../../lib/analytics/lane";
+import { LOCAL_DRAY_MILES, REGIONAL_DRAY_MILES } from "../../lib/analytics/drayage";
 import { laneVerdict } from "../../lib/analytics/rfq";
+import { useDrayage } from "../../state/useDrayage";
 import { ReportButton } from "./ReportButton";
 import type { Spread } from "../../lib/analytics/departures";
+import type { Schedule } from "../../types/schedule";
 
 /**
- * Analytics — what this lane's market looks like, and who is doing well in it.
+ * Analytics — how the market serves ONE DESTINATION, and who is worth asking.
  *
- * The grid ranks sailings so a booking can be made today. This sits above it: which carriers are
- * worth asking a forwarder to quote, so we can name them instead of leaving the RFQ open.
+ * THE LANE IS POL -> THE CUSTOMER'S DOOR. Not POL -> Last CY, which is what this used to show.
  *
- * IT DOES NOT NAME THEM FOR YOU. The table is sorted so the answer is the top row — most direct
- * sailing dates, then the shallowest transshipments, then the transit its main service actually
- * delivers. A recommendation sentence would be faster to read and harder to trust; the ordering
- * makes the same case out of numbers the reader can check.
+ * It is the same argument `lane.ts` already makes one level down, applied once more. That file
+ * refuses to compare on discharge port, because "Last CY is where the customer's box actually ends
+ * up; the discharge port is a routing choice made to get it there". But the box does not stop at
+ * the Last CY either — it stops at a warehouse. A Gainesville, FL warehouse is served through
+ * Jacksonville by the carriers that cover it, Savannah by others and Tampa by others again, and
+ * splitting those into three screens hides that they are three answers to one question.
+ *
+ * So this reads the SEARCH, exactly as Plan and Rank do — `nearby_schedules` already returns every
+ * Last CY inside the radius — and the Last CY becomes part of the routing rather than the frame.
+ *
+ * WHICH MEANS THE COMPARISON NEEDS THE GROUND LEG. Once the routings end in different places, ocean
+ * transit alone compares different journeys: Jacksonville is 84 road miles from that warehouse and
+ * Savannah is 210. Ranking is on DOOR transit, and the miles stay on the row because they are what
+ * the ground move costs.
+ *
+ * The strict port-pair comparison did not go away — it moved behind "Generate report", where every
+ * carrier ends in the same place and no drayage needs telling apart.
  */
 
 const fmt = (n: number | null | undefined) => (n == null ? "—" : String(n));
@@ -43,6 +56,90 @@ function SpreadCell({ s }: { s: Spread }) {
   );
 }
 
+/**
+ * Every routing a carrier runs that is worth quoting — not just the busiest one.
+ *
+ * A CARRIER IS NOT ONE SERVICE. The first line here is exactly what the old "Main service" and
+ * "Its transit" columns showed, so nothing is lost; the lines under it are what was being hidden.
+ * On Laem Chabang -> Los Angeles/Long Beach, ZIM runs three routings at 23, 25 and 27.5 days
+ * against a 26-day lane and the table used to name one of them.
+ *
+ * STACKED IN SERVICE ORDER — how often each routing runs, not how fast it is. A routing offered
+ * fifteen times is a better description of a carrier than one offered twice, and the same reasoning
+ * that makes "main service" the honest headline applies to the ones below it.
+ */
+const SERVICES_SHOWN = 3;
+
+function ServicesCell({ c }: { c: CarrierRow }) {
+  const usable = c.services.filter((s) => s.usable);
+  const slower = c.services.filter((s) => !s.usable);
+  const shown = usable.slice(0, SERVICES_SHOWN);
+  const rest = usable.length - shown.length;
+
+  // Spelled out rather than left blank, for the same reason Direct reads "none": an empty cell
+  // looks like missing data, and "every routing this carrier runs is materially slower than the
+  // lane" is a finding.
+  const title = (list: typeof c.services) =>
+    list
+      .map(
+        (s) =>
+          `${s.label}${s.label.endsWith(s.lastCy) ? "" : ` → ${s.lastCy}`} ×${s.options} · ${fmt(s.median)}d` +
+          (s.dray ? ` + ${s.dray.miles}mi dray from ${s.lastCy} = ${fmt(s.doorMedian)}d door` : ""),
+      )
+      .join("\n");
+
+  return (
+    <td className="an-services">
+      {shown.length === 0 ? (
+        <span className="an-dim">nothing within reach of the lane</span>
+      ) : (
+        shown.map((s) => (
+          <span className="an-service" key={s.label + s.lastCy}>
+            {s.label}
+            {/* THE HAND-OVER POINT, when it is not the discharge port.
+                Measured on Nhava Sheva -> Gainesville, HPL discharges at Savannah and carries the
+                box to Tampa — 26 of 53 rows on that search are this shape. The mileage beside this
+                line is measured from where the CUSTOMER takes over, so showing a chain ending
+                "Savannah" next to Tampa's 137 miles reads as Savannah being 137 miles away. It is
+                210. Naming both is the only honest way to put a ground leg on this row. */}
+            {!s.label.endsWith(s.lastCy) && (
+              <span className="an-service-cy" title="The carrier moves the box this far inland; your drayage starts here">
+                {" → "}
+                {s.lastCy}
+              </span>
+            )}
+            <span className="an-dim" title={`${s.options} options across ${s.dates} sailing dates`}>
+              {" "}×{s.options}
+            </span>
+            <span className="an-service-t">{fmt(s.median)}d</span>
+            {/* The ground leg belongs on the ROUTING, not on the carrier: one carrier can reach
+                Jacksonville and Savannah for the same warehouse, and those are the two numbers the
+                reader is actually choosing between. */}
+            {s.dray && (
+              <span
+                className="an-dim an-service-dray"
+                title={`${s.lastCy} → the destination: ${s.dray.miles} road miles, ${s.dray.hours}h drive, counted as ${s.dray.days} day${s.dray.days === 1 ? "" : "s"}`}
+              >
+                {" "}· {s.dray.miles}mi
+              </span>
+            )}
+          </span>
+        ))
+      )}
+      {rest > 0 && (
+        <span className="an-dim an-service-more" title={title(usable.slice(SERVICES_SHOWN))}>
+          +{rest} more usable
+        </span>
+      )}
+      {slower.length > 0 && (
+        <span className="an-dim an-service-more" title={title(slower)}>
+          +{slower.length} slower
+        </span>
+      )}
+    </td>
+  );
+}
+
 /** Signed days against the lane's median carrier. Faster reads as a gain, not a smaller number. */
 function VsLane({ v }: { v: number | null }) {
   if (v == null) return <td className="an-num an-dim">—</td>;
@@ -55,43 +152,87 @@ function VsLane({ v }: { v: number | null }) {
   );
 }
 
-export function AnalyticsView() {
-  const { rows, snapshotAt, scrapedByCarrier, loading, error } = useMarketSnapshot();
-  const [laneKey, setLaneKey] = useState<string | null>(null);
+interface Props {
+  /** The search result — one POL, every Last CY inside the radius. Already carrier/CRD filtered. */
+  rows: Schedule[];
+  /** What the user actually typed: the warehouse city. Empty until a search has run. */
+  destination: string;
+  pol: string;
+  radiusMiles: number;
+  searching: boolean;
+}
 
-  const lanes = useMemo(() => lanesIn(rows), [rows]);
-  const lane: Lane | undefined = useMemo(() => {
-    if (!lanes.length) return undefined;
-    return lanes.find((l) => `${l.pol} → ${l.lastCy}` === laneKey) ?? lanes[0];
-  }, [lanes, laneKey]);
+export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }: Props) {
+  // Every place the box could be handed over, for one round-trip to the router.
+  const lastCys = useMemo(
+    () => [...new Set(rows.map((r) => r.last_cy).filter(Boolean))],
+    [rows],
+  );
+  const { dray, loading: drayLoading, error: drayError } = useDrayage(lastCys, destination);
 
-  const carriers = useMemo(() => (lane ? carrierStats(rows, lane) : []), [rows, lane]);
-  const corridors = useMemo(() => (lane ? corridorStats(rows, lane) : []), [rows, lane]);
-  const verdict = useMemo(() => (lane ? laneVerdict(lane, carriers) : null), [lane, carriers]);
+  // Freshness comes from the rows on screen rather than a separate market read: these ARE the rows
+  // being analysed, so the date beside a carrier is the date of the data in front of you.
+  const scrapedByCarrier = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of rows) {
+      const q = r.query_date;
+      if (!q) continue;
+      const prev = m.get(r.carrier_code);
+      if (!prev || q > prev) m.set(r.carrier_code, q);
+    }
+    return m;
+  }, [rows]);
 
-  if (loading) return <div className="an-state">Loading market…</div>;
-  if (error) return <div className="an-state an-error">Could not load analytics — {error}</div>;
-  if (!lane || !verdict) return <div className="an-state">No sailings in the current snapshot.</div>;
+  // NO LANE ARGUMENT. `inLane(rows, undefined)` returns the rows untouched, so the statistics run
+  // over the whole search — every Last CY within the radius — rather than one port pair.
+  const carriers = useMemo(() => carrierStats(rows, undefined, dray), [rows, dray]);
+  const corridors = useMemo(() => corridorStats(rows), [rows]);
+
+  const lane: Lane = useMemo(
+    () => ({ pol, lastCy: destination, destination }),
+    [pol, destination],
+  );
+  const verdict = useMemo(() => laneVerdict(lane, carriers), [lane, carriers]);
+
+  if (searching) return <div className="an-state">Searching…</div>;
+  if (!destination) {
+    return (
+      <div className="an-state">
+        Search a load port and a final destination above to see how the market serves it.
+      </div>
+    );
+  }
+  if (!rows.length) {
+    return (
+      <div className="an-state">
+        No sailings from {pol} within {radiusMiles} miles of {destination}. Widen the radius, or
+        check the carrier filter and cargo-ready date.
+      </div>
+    );
+  }
 
   return (
     <div className="an-root">
       <div className="an-head">
-        <label className="an-lane">
-          <span className="eyebrow">Lane</span>
-          <select value={`${lane.pol} → ${lane.lastCy}`} onChange={(e) => setLaneKey(e.target.value)}>
-            {lanes.map((l) => (
-              <option key={`${l.pol} → ${l.lastCy}`} value={`${l.pol} → ${l.lastCy}`}>
-                {l.pol} → {l.lastCy} ({l.options})
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="an-meta">
-          {carriers.length} carriers · {corridors.length} corridors
-          {snapshotAt && <> · snapshot {snapshotAt.slice(0, 10)}</>}
+        <span className="an-lane-title">
+          <span className="eyebrow">Serving</span>
+          <strong>
+            {pol} → {destination}
+          </strong>
         </span>
-        <span className="an-meta an-dim">whole current market — not filtered by the search above</span>
-        <ReportButton rows={rows} snapshotAt={snapshotAt} />
+        <span className="an-meta">
+          {carriers.length} carriers · {lastCys.length} discharge option
+          {lastCys.length === 1 ? "" : "s"} · within {radiusMiles} mi
+        </span>
+        {/* Said out loud: a door figure that is quietly missing its ground leg is worse than one
+            that admits it, because the number still looks complete. */}
+        {drayLoading && <span className="an-meta an-dim">measuring drayage…</span>}
+        {drayError && (
+          <span className="an-meta an-slow" title={drayError}>
+            drayage unavailable — ranked on ocean transit only
+          </span>
+        )}
+        <ReportButton />
       </div>
 
       <div className="an-scroll">
@@ -115,9 +256,9 @@ export function AnalyticsView() {
                 <th className="an-num" title="Quotable options: one routing, on one day. Direct + 1 TS + 2+ TS always add up to this, because an option has exactly one routing depth.">Options</th>
                 <th className="an-num" title="Days a box can actually leave on. Fewer than Options means several routings share a departure day.">Dates</th>
                 <th className="an-num" title="Mean transshipments per option. Lower is a shorter, less fragile route.">Avg TS</th>
-                <th title="The routing this carrier runs on the most dates, and what that routing delivers">Main service</th>
-                <th className="an-num" title="Median transit of that main service — what is on offer repeatedly, not the best case">Its transit</th>
-                <th className="an-num">All sailings — median / range</th>
+                <th title="Every routing this carrier runs that is within reach of the lane — each one is another chance at space. Busiest first, so the top line is the service it runs most. The mileage is that routing's ground leg to your destination.">Usable services</th>
+                <th className="an-num" title="Ocean transit plus the ground leg — what the customer actually waits. This is what the table is ranked on, because the routings end in different ports.">Door</th>
+                <th className="an-num" title="Ocean transit only — port of loading to the discharge that routing uses">Ocean — median / range</th>
                 <th className="an-num" title="Slowest minus fastest. A wide spread means the transit you were quoted is not the one you can count on.">Spread</th>
                 <th className="an-num" title="Against the lane's median carrier">vs lane</th>
                 <th title="First and last published sailing. A service ending soon is thin in a different way from a small one.">Sailing window</th>
@@ -150,19 +291,18 @@ export function AnalyticsView() {
                       per departure; fewer dates means a day carries several routings. */}
                   <td className="an-num an-dim">{c.sailDates}</td>
                   <td className="an-num an-strong">{c.avgTs.toFixed(2)}</td>
-                  <td className="an-route">
-                    {c.mainRoute ? (
-                      <>
-                        {c.mainRoute.label}
-                        <span className="an-dim" title={`${c.mainRoute.options} options on this routing, across ${c.mainRoute.dates} sailing dates`}>
-                          {" "}×{c.mainRoute.options}
-                        </span>
-                      </>
+                  <ServicesCell c={c} />
+                  {/* The ranked figure leads in weight; ocean sits beside it so the reader can see
+                      which half of the journey each number came from. */}
+                  <td className="an-num an-strong">
+                    {c.door?.median == null ? (
+                      <span className="an-dim" title="No ground leg resolved for this carrier's routings">
+                        —
+                      </span>
                     ) : (
-                      "—"
+                      `${c.door.median}d`
                     )}
                   </td>
-                  <td className="an-num an-strong">{fmt(c.mainRoute?.median ?? null)}</td>
                   <SpreadCell s={c.transit} />
                   {/* Its own column because it decides bookings and was unreadable inside the
                       range. On Semarang -> Savannah, HMM has the most sailings on the lane and a
@@ -193,9 +333,21 @@ export function AnalyticsView() {
             carries several.
             <strong> Direct / 1 TS / 2+ TS</strong> always add up to <strong>Options</strong>,
             because an option has exactly one routing depth.
-            <strong> Its transit</strong> is the median of the service each carrier runs most, not
-            its fastest sailing — a one-off quick crossing is not what gets booked repeatedly, and
-            each option carries the median of its own arrivals for the same reason.
+            <strong> Usable services</strong> lists every routing a carrier runs that lands within
+            10% of the lane median — the same margin the table uses to decide a difference is worth
+            acting on. A carrier is rarely one service, and a second acceptable routing is not a
+            faster transit but <em>another chance at space</em>. The stack is ordered by how often
+            each routing runs rather than how fast it is, which is why a lower line is sometimes the
+            quicker one. <strong>+N slower</strong> is what did not clear the margin; hover it to
+            see what and by how much.
+            <strong> Door</strong> is ocean transit plus the ground leg, and it is what the table is
+            ranked on. It has to be: your carriers do not all end in the same port, so comparing
+            ocean legs alone compares different journeys. The mileage beside each routing is the
+            road distance from that discharge point to your destination — a ground leg up to{" "}
+            {LOCAL_DRAY_MILES} miles counts as one day, up to {REGIONAL_DRAY_MILES} as two, beyond
+            that as three, because past local range a dray stops being a same-day turn. Those bands
+            are a judgement about how the move runs, not a measurement; the miles are the
+            measurement, and they are what the ground leg <em>costs</em>.
             <strong> Spread</strong> is what the median hides: the most-served carrier on a lane is
             often the least predictable, and a 27-day spread means the transit you were quoted is
             not the one you can count on. <strong>Sailing window</strong> separates a service that

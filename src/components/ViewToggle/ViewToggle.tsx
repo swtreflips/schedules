@@ -19,7 +19,7 @@ const OPTIONS: Array<{ value: ViewMode; label: string; hint: string }> = [
   {
     value: "analytics",
     label: "Analytics",
-    hint: "Corridor and carrier stats for a lane — whole market, not this search",
+    hint: "How the market serves your destination — carriers ranked door to door, drayage included",
   },
 ];
 
