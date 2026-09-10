@@ -884,11 +884,15 @@ input[type="number"] {
   white-space: nowrap;
 }
 
+/* CENTRED, NOT BASELINE. A row is as tall as its tallest cell, and the stacked service columns can
+   run to three lines — so a baseline-aligned figure sat pinned to the top with an inch of nothing
+   under it. Centring lets the single-value columns float in the middle of whatever height the
+   routings dictate, which reads as one row rather than as a row with a tail. */
 .an-table td {
   padding: 7px 10px;
   border-bottom: 1px solid var(--color-rule);
   color: var(--color-ink);
-  vertical-align: baseline;
+  vertical-align: middle;
 }
 
 .an-table tbody tr:hover { background: var(--color-panel); }
@@ -909,29 +913,31 @@ input[type="number"] {
 .an-dim { color: var(--color-faint); }
 .an-rail { font-family: var(--font-mono); font-size: 10px; color: var(--color-accent); letter-spacing: 0.04em; }
 
-/* A carrier's usable routings, stacked — busiest first, the top line being what it runs most.
-   Aligned to the top rather than the baseline the rest of the table uses: with up to three lines
-   in the cell, baseline alignment would drop the whole row to the last of them. */
+/* A carrier's routings, stacked — busiest first, the top line being what it runs most.
+   Aligned to the TOP while the rest of the row centres: these three columns are one table turned
+   sideways, so line two of each has to sit beside line two of the others. Centring them would let a
+   two-line stack drift against a three-line one and break the reading across. */
 .an-table td.an-services { vertical-align: top; }
 .an-service { display: block; white-space: nowrap; }
-/* The transit trails its routing so the labels stay left-aligned and readable down the column;
-   tabular so the day counts still line up against each other. */
-.an-service-t {
-  margin-left: 8px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
+
+/* A rule between routings, so a three-deep stack reads as three things rather than as a paragraph.
+   APPLIED TO EVERY STACKED COLUMN, not only the two that carry text: the spacing is what keeps the
+   stacks in step, so a column without it would sit a few pixels higher on every line after the
+   first and the row would stop reading across. */
+.an-service + .an-service {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--color-rule);
 }
-.an-service-more { display: block; font-size: 10px; }
-/* The ground leg trails its routing, quieter than the transit beside it — it is the cost signal,
-   not the ranking one, and the ranking one is already the Door column. */
-.an-service-dray { font-variant-numeric: tabular-nums; }
+/* The "+N slower" / "out of reach" tail. Deliberately NOT separated by a rule — it is a footnote on
+   the stack rather than another routing in it, and a line above it would promote it to one. */
+.an-service-more { display: block; margin-top: 6px; font-size: 10px; }
 /* Where the carrier hands over. Same weight as the chain it extends — it is part of the routing,
-   not an annotation on it, and the mileage next to it is measured from here. */
+   not an annotation on it, and the drayage column is measured from here. */
 .an-service-cy { color: var(--color-secondary); }
 /* A routing shown for completeness rather than as a candidate — the carrier runs it, it is just
    materially slower than the lane. Named rather than hidden: an empty cell reads as missing data. */
 .an-service--far { color: var(--color-muted); }
-.an-service--far .an-service-t { font-weight: 400; }
 
 /* The destination heading replaces the lane picker: there is nothing to choose any more, the
    search above chose it. */
