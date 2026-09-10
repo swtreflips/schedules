@@ -105,8 +105,8 @@ function shownServices(c: CarrierRow) {
 /**
  * One stacked column of the service block — a cell that renders one line per routing shown.
  *
- * FIVE COLUMNS ARE ONE TABLE TURNED SIDEWAYS: TS chain, POD and Last CY under a spanning "Main
- * services" header, then Service median and Drayage distance. Each stacks the same routings in the
+ * FIVE COLUMNS ARE ONE TABLE TURNED SIDEWAYS: POD, TS chain and Last CY under a spanning "Main
+ * services" label, then Service median and Drayage distance. Each stacks the same routings in the
  * same order, so a row of the stack reads across as one routing. Splitting the routing into three
  * columns is what makes it skimmable — "Singapore, Singapore > Shanghai, China > Los Angeles/Long
  * Beach, CA → Tampa, FL ×5" is three separate facts wearing one string, and the eye cannot compare
@@ -143,7 +143,6 @@ function StackedCell({
 const ViaCell = ({ c }: { c: CarrierRow }) => (
   <StackedCell
     c={c}
-    className="an-group-start"
     render={(s) =>
       s.via.length ? s.via.join(" > ") : <span className="an-dim">direct</span>
     }
@@ -157,7 +156,7 @@ const ViaCell = ({ c }: { c: CarrierRow }) => (
 
 /** Where the box comes off the ship. */
 const PodCell = ({ c }: { c: CarrierRow }) => (
-  <StackedCell c={c} render={(s) => s.discharge} />
+  <StackedCell c={c} className="an-group-start" render={(s) => s.discharge} />
 );
 
 /**
@@ -382,30 +381,36 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
                   offset. Split into their own columns the discharge ports line up under each other,
                   which is the comparison the table exists for. They keep one heading because they
                   are still one thing: the services this carrier runs. */}
-              <tr>
-                <th rowSpan={2}>Carrier</th>
-                <th className="an-num" rowSpan={2} title="Direct options">Direct</th>
-                <th className="an-num" rowSpan={2} title="Options with one transshipment">1 TS</th>
-                <th className="an-num" rowSpan={2} title="Options with two or more transshipments">2+ TS</th>
-                <th className="an-num" rowSpan={2} title="Quotable options: one routing, on one day. Direct + 1 TS + 2+ TS always add up to this, because an option has exactly one routing depth.">Options</th>
-                <th className="an-num" rowSpan={2} title="Days a box can actually leave on. Fewer than Options means several routings share a departure day.">Dates</th>
-                <th className="an-num" rowSpan={2} title="Mean transshipments per option. Lower is a shorter, less fragile route.">Avg TS</th>
+              {/* EVERY COLUMN HEADER SITS ON ONE LINE. The row above carries nothing but the group
+                  label, floating over the four columns it covers — spanning the rest with empty,
+                  border-less cells rather than stretching the real headings across two rows, which
+                  centred them against the sub-heads and left the header looking lopsided. */}
+              <tr className="an-grouprow">
+                <th className="an-spacer" colSpan={7} />
                 <th className="an-group" colSpan={4} title="Every routing this carrier runs that is within reach of the lane — each one is another chance at space. Busiest first, so the top line is the service it runs most.">
                   Main services
                 </th>
-                <th className="an-num an-group-end" rowSpan={2} title="Each routing's own median transit, lined up with the routing beside it. Not the same as the carrier's overall median two columns right — a carrier running three routings has three of these.">Service median</th>
-                <th className="an-num" rowSpan={2} title="Road miles from where each routing hands the box over to your destination — measured from the Last CY, which is not always the discharge port.">Drayage distance</th>
-                <th className="an-num" rowSpan={2} title="Ocean transit only — port of loading to the discharge that routing uses. Across every option this carrier offers, so it describes the carrier rather than any one routing.">Ocean — median / range</th>
-                <th className="an-num" rowSpan={2} title="Slowest minus fastest. A wide spread means the transit you were quoted is not the one you can count on.">Spread</th>
-                <th className="an-num" rowSpan={2} title="Against the lane's median carrier">vs lane</th>
-                <th rowSpan={2} title="First and last published sailing. A service ending soon is thin in a different way from a small one.">Sailing window</th>
-                <th rowSpan={2} title="When this carrier was last scraped">Scraped</th>
+                <th className="an-spacer" colSpan={7} />
               </tr>
               <tr>
-                <th className="an-sub" title="The hand-offs, in order. Blank means the box stays on one ship from load port to discharge.">TS chain</th>
-                <th className="an-sub" title="Where the box comes off the ship">POD</th>
-                <th className="an-sub" title="Where the carrier's responsibility ends and your drayage starts. Often the discharge port; when it is not, the carrier is moving the box inland for you.">Last CY</th>
-                <th className="an-sub an-num" title="Options on that routing — one routing, on one day">Options</th>
+                <th>Carrier</th>
+                <th className="an-num" title="Direct options">Direct</th>
+                <th className="an-num" title="Options with one transshipment">1 TS</th>
+                <th className="an-num" title="Options with two or more transshipments">2+ TS</th>
+                <th className="an-num" title="Quotable options: one routing, on one day. Direct + 1 TS + 2+ TS always add up to this, because an option has exactly one routing depth.">Options</th>
+                <th className="an-num" title="Days a box can actually leave on. Fewer than Options means several routings share a departure day.">Dates</th>
+                <th className="an-num" title="Mean transshipments per option. Lower is a shorter, less fragile route.">Avg TS</th>
+                <th className="an-group-start" title="Where the box comes off the ship">POD</th>
+                <th title="The hand-offs, in order, before that discharge. Reads “direct” when the box stays on one ship the whole way.">TS chain</th>
+                <th title="Where the carrier's responsibility ends and your drayage starts. Often the discharge port; when it is not, the carrier is moving the box inland for you.">Last CY</th>
+                <th className="an-num" title="Options on that routing — one routing, on one day">Options</th>
+                <th className="an-num an-group-end" title="Each routing's own median transit, lined up with the routing beside it. Not the same as the carrier's overall median two columns right — a carrier running three routings has three of these.">Service median</th>
+                <th className="an-num" title="Road miles from where each routing hands the box over to your destination — measured from the Last CY, which is not always the discharge port.">Drayage distance</th>
+                <th className="an-num" title="Ocean transit only — port of loading to the discharge that routing uses. Across every option this carrier offers, so it describes the carrier rather than any one routing.">Ocean — median / range</th>
+                <th className="an-num" title="Slowest minus fastest. A wide spread means the transit you were quoted is not the one you can count on.">Spread</th>
+                <th className="an-num" title="Against the lane's median carrier">vs lane</th>
+                <th title="First and last published sailing. A service ending soon is thin in a different way from a small one.">Sailing window</th>
+                <th title="When this carrier was last scraped">Scraped</th>
               </tr>
             </thead>
             <tbody>
@@ -434,8 +439,8 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
                       per departure; fewer dates means a day carries several routings. */}
                   <td className="an-num an-dim">{c.sailDates}</td>
                   <td className="an-num an-strong">{c.avgTs.toFixed(2)}</td>
-                  <ViaCell c={c} />
                   <PodCell c={c} />
+                  <ViaCell c={c} />
                   <LastCyCell c={c} />
                   <OptionsCell c={c} />
                   <ServiceMedianCell c={c} />
