@@ -114,7 +114,7 @@ function shownServices(c: CarrierRow) {
 /**
  * One stacked column of the service block — a cell that renders one line per routing shown.
  *
- * FIVE COLUMNS ARE ONE TABLE TURNED SIDEWAYS: POD, TS chain and Last CY under a spanning "Main
+ * FIVE COLUMNS ARE ONE TABLE TURNED SIDEWAYS: TS ports, POD and Last CY under a spanning "Main
  * services" label, then Service median and Drayage distance. Each stacks the same routings in the
  * same order, so a row of the stack reads across as one routing. Splitting the routing into three
  * columns is what makes it skimmable — "Singapore, Singapore > Shanghai, China > Los Angeles/Long
@@ -152,6 +152,7 @@ function StackedCell({
 const ViaCell = ({ c }: { c: CarrierRow }) => (
   <StackedCell
     c={c}
+    className="an-group-start"
     render={(s) =>
       s.via.length ? s.via.join(" > ") : <span className="an-dim">direct</span>
     }
@@ -163,9 +164,27 @@ const ViaCell = ({ c }: { c: CarrierRow }) => (
   />
 );
 
-/** Where the box comes off the ship. */
+/**
+ * Where the box comes off the ship — and, when the carrier keeps going, where the rail leg starts.
+ *
+ * THE TAG BELONGS HERE, NOT ON LAST CY. The inland move begins at the discharge port: "New York,
+ * NY rail" reads as "discharged at New York, then railed", which is the fact. On the Last CY it
+ * read as though the destination were somehow rail-ish.
+ */
 const PodCell = ({ c }: { c: CarrierRow }) => (
-  <StackedCell c={c} className="an-group-start" render={(s) => s.discharge} />
+  <StackedCell
+    c={c}
+    render={(s) => (
+      <>
+        {s.discharge}
+        {s.railLeg && (
+          <span className="an-rail" title={`Railed inland from here to ${s.lastCy}`}>
+            {" "}rail
+          </span>
+        )}
+      </>
+    )}
+  />
 );
 
 /**
@@ -179,29 +198,22 @@ const PodCell = ({ c }: { c: CarrierRow }) => (
 const LastCyCell = ({ c }: { c: CarrierRow }) => (
   <StackedCell
     c={c}
-    render={(s) =>
-      s.railLeg ? (
-        <>
-          <span
-            className="an-service-cy"
-            title="The carrier moves the box this far inland after discharging; your drayage starts here"
-          >
-            {s.lastCy}
-          </span>
-          {/* Named on the row, because it is why this routing sits below the water ones. */}
-          <span
-            className="an-rail"
-            title={`Inland from ${s.discharge} — a different network and a different move`}
-          >
-            {" "}rail
-          </span>
-        </>
-      ) : (
-        <span className="an-dim" title="No inland move — the carrier hands over where the box comes off the ship">
-          same as POD
-        </span>
-      )
-    }
+    render={(s) => (
+      // ALWAYS THE PLACE, never a label standing in for it. This read "same as POD" when the two
+      // matched, which made the reader translate a phrase back into a port name — and put a word
+      // where every other line in the column has a place. The name is repeated instead, quietly,
+      // so the column can be read straight down.
+      <span
+        className={s.railLeg ? "an-service-cy" : "an-dim"}
+        title={
+          s.railLeg
+            ? `Railed inland from ${s.discharge}; your drayage starts here`
+            : "No inland move — the carrier hands over where the box comes off the ship"
+        }
+      >
+        {s.lastCy}
+      </span>
+    )}
   />
 );
 
@@ -486,12 +498,13 @@ export function AnalyticsView({
                 <th className="an-num" title="Quotable options: one routing, on one day. Direct + 1 TS + 2+ TS always add up to this, because an option has exactly one routing depth.">Options</th>
                 <th className="an-num" title="Days a box can actually leave on. Fewer than Options means several routings share a departure day.">Dates</th>
                 <th className="an-num" title="Mean transshipments per option. Lower is a shorter, less fragile route.">Avg TS</th>
+                <th className="an-group-start" title="The transshipment ports, in order, before the box is discharged. Reads “direct” when it stays on one ship the whole way.">TS ports</th>
                 {/* The same filter Plan and Rank carry, writing the same `excludedPods` set — so
                     switching a discharge port off here switches it off everywhere. It is the answer
                     to a carrier publishing rail variants you would rather not look at: turn off New
                     York and the cross-country routings leave the table, without the analytics ever
                     deciding for you that they do not count. */}
-                <th className="an-group-start">
+                <th>
                   <button
                     ref={podTrigger}
                     type="button"
@@ -518,7 +531,6 @@ export function AnalyticsView({
                     )}
                   </button>
                 </th>
-                <th title="The hand-offs, in order, before that discharge. Reads “direct” when the box stays on one ship the whole way.">TS chain</th>
                 <th title="Where the carrier's responsibility ends and your drayage starts. Often the discharge port; when it is not, the carrier is moving the box inland for you.">Last CY</th>
                 <th className="an-num" title="Options on that routing — one routing, on one day">Options</th>
                 <th className="an-num an-group-end" title="Each routing's own median transit, lined up with the routing beside it. Not the same as the carrier's overall median two columns right — a carrier running three routings has three of these.">Service median</th>
@@ -556,8 +568,8 @@ export function AnalyticsView({
                       per departure; fewer dates means a day carries several routings. */}
                   <td className="an-num an-dim">{c.sailDates}</td>
                   <td className="an-num an-strong">{c.avgTs.toFixed(2)}</td>
-                  <PodCell c={c} />
                   <ViaCell c={c} />
+                  <PodCell c={c} />
                   <LastCyCell c={c} />
                   <OptionsCell c={c} />
                   <ServiceMedianCell c={c} />
@@ -600,7 +612,7 @@ export function AnalyticsView({
             hand-over point come first</strong> — a carrier discharging at New York and railing to
             Los Angeles is a genuine option, and on a full week it is the answer, but it is not the
             one you reach for, so it sits below even a transshipped routing that ends where it
-            discharges. Those are marked <em>rail</em> under Last CY. Under that, the stack is
+            discharges. Those are marked <em>rail</em> beside the discharge port they start from. Under that, the stack is
             ordered by how often each routing runs rather than how fast it is, which is why a lower
             line is sometimes the quicker one.
             A routing qualifies when it lands within 10% of the lane — the same margin the table
