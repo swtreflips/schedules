@@ -319,17 +319,43 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   check("the small, wholly usable carrier is not demoted", cs.map((c) => c.carrier), ["SMALL", "ANCHOR", "PADDED"]);
 }
 
-// MORE USABLE ROUTINGS BREAKS A TIE. Two carriers alike on directness, depth and substance are not
-// alike if one has a single acceptable routing and the other has two.
+// SPEED ORDERS THEM; DEPTH BREAKS A TIE. Both medians are 29 here, so nothing separates these two on
+// transit and the second usable routing decides it. That is the case the depth key was written for,
+// and it still works.
 {
   const rows = [
     ...svc("ONE_WAY", 10, 29, ["A"], "POD", 1),
     ...svc("TWO_WAYS", 5, 29, ["A"], "POD", 2),
-    ...svc("TWO_WAYS", 5, 30, ["B"], "POD", 4),
+    ...svc("TWO_WAYS", 5, 29, ["B"], "POD", 4),
   ];
   const cs = carrierStats(rows, LANE);
-  check("the carrier with two usable routings leads", cs.map((c) => c.carrier), ["TWO_WAYS", "ONE_WAY"]);
-  check("...on depth, not on speed", cs.map((c) => c.usableServices), [2, 1]);
+  check("a genuine tie on transit", cs.map((c) => c.transit.median), [29, 29]);
+  check("...is broken by the second usable routing", cs.map((c) => c.carrier), ["TWO_WAYS", "ONE_WAY"]);
+  check("...which is what the key measures", cs.map((c) => c.usableServices), [2, 1]);
+}
+
+// ── DEPTH DOES NOT OUTRANK SPEED ─────────────────────────────────────────────────────
+//
+// It used to, and the measure was wrong for the argument it made. Each extra routing was "another
+// chance at space" — sound — but a routing is not a chance, an OPTION is, and counting routings
+// makes a two-option routing worth as much as an eighteen-option one.
+//
+// Measured on Semarang -> Los Angeles: EMC runs three usable routings carrying SEVEN options between
+// them, HMM two carrying TWENTY-FIVE. EMC led the lane — on roughly a third of the chances at space
+// — because its third routing was worth two options and decisive. Shaped from those numbers.
+{
+  const rows = [
+    ...svc("EMC", 3, 34, ["A"], "POD", 1),
+    ...svc("EMC", 2, 34, ["B"], "POD", 3),
+    ...svc("EMC", 2, 34, ["C"], "POD", 5),
+    ...svc("HMM", 18, 31, ["A"], "POD", 2),
+    ...svc("HMM", 7, 31, ["B"], "POD", 6),
+  ];
+  const cs = carrierStats(rows, LANE);
+  check("the deeper-by-routings carrier no longer leads", cs.map((c) => c.carrier), ["HMM", "EMC"]);
+  check("...it did have more routings", cs.map((c) => c.usableServices), [2, 3]);
+  check("...and far fewer chances on them", cs.map((c) => c.usableOptions), [25, 7]);
+  check("...speed is what decided it", cs.map((c) => c.transit.median), [31, 34]);
 }
 
 // ── A DUPLICATED ROUTING IS NOT A FREQUENT ONE ───────────────────────────────────────

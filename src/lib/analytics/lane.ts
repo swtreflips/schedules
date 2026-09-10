@@ -565,14 +565,31 @@ export function carrierStats(
         // has three: each extra routing is another chance at space at a transit that still works.
         // It sits below the thin guard on purpose — depth is a reason to prefer a carrier, not a
         // reason to promote one whose service is too small to rely on.
-        b.usableServices - a.usableServices ||
-        // OCEAN TRANSIT. Drayage is not a tiebreak either — it is not the carrier's leg, so it does
-        // not order carriers.
+        // SPEED, THEN DEPTH — and it used to be the other way round.
+        //
+        // Usable ROUTINGS led, on the argument that each extra one is another chance at space. The
+        // argument is sound and the measure was not: a routing is not a chance, an OPTION is, and
+        // counting routings treats a two-option routing as worth the same as an eighteen-option
+        // one. Measured on Semarang -> Los Angeles, EMC runs three usable routings carrying seven
+        // options between them and HMM runs two carrying twenty-five. EMC led — on roughly a third
+        // of the chances at space — because its third routing was worth two options and decisive.
+        //
+        // Counting usable OPTIONS instead was the obvious repair and is worse: on that same lane it
+        // puts ONE (8 usable, one routing, the slowest of the group at 37.25 days) above EMC (7
+        // usable, three routings, 34) on a one-option difference. Option counts are noise at that
+        // margin.
+        //
+        // So speed orders them and depth breaks ties. Depth still decides between carriers that are
+        // genuinely alike on transit, which is the case the key was written for; it no longer
+        // outranks three days of sailing.
         //
         // LAST rather than Infinity for the null case: two carriers that both published no transit
         // would make `Infinity - Infinity` NaN, and a comparator returning NaN leaves the order
         // undefined rather than tied. Reachable — a carrier can publish departures with no arrival.
+        //
+        // Drayage is in neither key: it is not the carrier's leg, so it does not order carriers.
         (speed(a) ?? LAST) - (speed(b) ?? LAST) ||
+        b.usableServices - a.usableServices ||
         b.options - a.options ||
         a.carrier.localeCompare(b.carrier),
     );
