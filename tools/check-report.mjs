@@ -137,6 +137,47 @@ check("date helper pads single digits", reportDate(new Date(2026, 0, 5)), "05.01
   check("plain-text fallback exists", renderEmailText(report).includes("WHERE CARRIER CHOICE MATTERS MOST"), true);
 }
 
+// ── TWO OUTPUTS, ONE RENDERER ────────────────────────────────────────────────────────
+//
+// "Generate report" writes a FILE: every lane with a carrier choice gets its table, because a
+// reader scrolls and completeness is the point. "Copy" puts the report in an Outlook message body,
+// where Gmail clips near 102 KB — so that one is budgeted, and says so when it trims.
+//
+// Measured on the live market: 51 lane tables at 375 KB full, against 6 tables at 98 KB copied.
+{
+  // Only a lane HEADING carries a figure after the phrase; the legend uses it twice as prose.
+  const tables = (h) => (h.match(/lane median [0-9]/g) ?? []).length;
+
+  // A MARKET BIG ENOUGH FOR THE BUDGET TO BITE. The small fixture above renders well under 102 KB
+  // either way, so `full` and `!full` produce the same document and a test on it proves nothing —
+  // verified by flipping the flag off and watching every assertion still pass. Sixty lanes of eight
+  // carriers is the shape of the live market (73 lanes, 51 with a choice).
+  const BIG = [];
+  for (let lane = 0; lane < 60; lane += 1)
+    for (const [i, carrier] of ["A", "B", "C", "D", "E", "F", "G", "H"].entries())
+      BIG.push(...svc(carrier, "POL_BIG", `DEST_${lane}`, 6, 30 + i * 3, i % 2 ? ["HUB_LONG_NAME"] : []));
+
+  const bigReport = buildWeeklyReport(BIG, { today: new Date(2026, 8, 1) });
+  const full = renderEmailHtml(bigReport, true);
+  const budgeted = renderEmailHtml(bigReport, false);
+
+  check("the big fixture really does overflow the budget", budgeted.length < full.length, true);
+  check("every lane with a choice gets a carrier table", tables(full), bigReport.laneTables.length);
+  check("...and the full render never stops short", full.includes("Showing the top"), false);
+  check("...while the budgeted one trims, and says so", budgeted.includes("Showing the top"), true);
+  check("...staying under Gmail's clip", budgeted.length < 102 * 1024, true);
+
+  // The Word rules are not relaxed just because this path is bigger — it is still HTML someone may
+  // open in Outlook after saving it.
+  for (const [name, re] of [
+    ["no flex in the full render", /display:\s*flex/],
+    ["no grid in the full render", /display:\s*grid/],
+    ["no border-radius in the full render", /border-radius/],
+    ["no position: in the full render", /position:/],
+    ["no var(-- in the full render", /var\(--/],
+  ]) check(name, re.test(full), false);
+}
+
 // ── DEGENERATE INPUT ─────────────────────────────────────────────────────────────────
 {
   const empty = buildWeeklyReport([], { today: new Date(2026, 8, 1) });

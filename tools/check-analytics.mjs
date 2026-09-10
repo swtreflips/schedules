@@ -30,6 +30,7 @@ register(
 
 const { carrierStats, corridorStats, lanesIn } = await import("../src/lib/analytics/lane.ts");
 const { laneVerdict } = await import("../src/lib/analytics/rfq.ts");
+const { drayDays, doorTransit, toDray } = await import("../src/lib/analytics/drayage.ts");
 
 let failed = 0;
 const check = (name, got, want) => {
@@ -64,6 +65,10 @@ const conn = (carrier, etd, days, via = [], pod = "POD", vessel = "V1") => ({
 /** `count` sailings on distinct dates, all the same transit and routing. */
 const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   Array.from({ length: count }, (_, i) => conn(carrier, day(start + i * 2), days, via, pod, `${carrier}${i}`));
+
+/** Same, but landing at a named Last CY — for the destination-mode fixtures. */
+const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =>
+  svc(carrier, count, days, via, pod, start).map((r) => ({ ...r, last_cy: lastCy }));
 
 // ── DIRECT COMES FIRST ───────────────────────────────────────────────────────────────
 // A direct booking has no hand-off where space can be lost, so direct sailing DATES lead the sort
@@ -152,6 +157,95 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   check("main service is the most-run routing", c.mainRoute.label, "USUAL > POD");
   check("...with its own count, in options not connections", [c.mainRoute.options, c.mainRoute.dates], [9, 9]);
   check("...and its own median, not the best case", [c.mainRoute.median, c.transit.min], [30, 20]);
+}
+
+// ── A CARRIER IS NOT ONE SERVICE ─────────────────────────────────────────────────────
+//
+// The table used to describe a carrier by its busiest routing alone, which reads correctly only
+// when everything else it runs is much worse. Measured on Laem Chabang -> Los Angeles/Long Beach,
+// ZIM runs three routings at 23, 25 and 27.5 days against a 26-day lane and WHL runs two at 22 and
+// 26 — extra chances at space that the row did not mention.
+//
+// USABLE MEANS WITHIN 10% OF THE LANE MEDIAN, the same margin the sort already uses to decide a
+// difference is worth acting on.
+{
+  // Carrier medians land at 28 / 30 / 55, so the LANE median is 30 and the ceiling is 33. The
+  // second service sits at 32 — STRICTLY between the two, so it is usable only because of the
+  // margin. Put it on the median instead and the fixture passes with any margin at all, testing
+  // nothing.
+  const rows = [
+    ...svc("DEEP", 12, 28, ["A"], "POD", 1), // main service, comfortably inside
+    ...svc("DEEP", 4, 32, ["B"], "POD", 3), // slightly worse — still usable, and the point
+    ...svc("DEEP", 4, 60, ["C"], "POD", 5), // far worse — a decoy
+    ...svc("FLAT", 8, 30, ["A"], "POD", 2),
+    ...svc("SLOW", 8, 55, ["A"], "POD", 4),
+  ];
+  const cs = carrierStats(rows, LANE);
+  const deep = cs.find((c) => c.carrier === "DEEP");
+  const slow = cs.find((c) => c.carrier === "SLOW");
+
+  check("services[0] IS mainRoute, the same object", deep.services[0] === deep.mainRoute, true);
+  check("every routing is kept, not just the busiest", deep.services.length, 3);
+  check("...ordered by how often each runs", deep.services.map((s) => s.options), [12, 4, 4]);
+  check("...their options sum to the carrier's", deep.services.reduce((n, s) => n + s.options, 0), deep.options);
+
+  check("a routing slightly worse than the lane is USABLE", deep.services[1].usable, true);
+  check("...it is inside the margin, not on the median", [deep.services[1].median, deep.vsLaneMedian], [32, -2]);
+  check("...a far worse one is not usable", deep.services[2].usable, false);
+  check("two usable routings, three run", [deep.usableServices, deep.services.length], [2, 3]);
+  check("usableOptions counts only those two", deep.usableOptions, 16);
+  check("a carrier with nothing in reach reads zero", [slow.usableServices, slow.usableOptions], [0, 0]);
+}
+
+// A LANE WITH NO PUBLISHED TRANSIT HAS NO BENCHMARK, so nothing is disqualified. Zeroing every
+// carrier would read as "no carrier here is any good" when the truth is "no transit was published".
+{
+  const rows = [...svc("A", 3, null, [], "POD", 1), ...svc("B", 3, null, ["H"], "POD", 2)];
+  const cs = carrierStats(rows, LANE);
+  check("no lane median means every routing stays usable", cs.map((c) => c.usableServices), [1, 1]);
+  check("...and their options are all counted", cs.map((c) => c.usableOptions), [3, 3]);
+}
+
+// ── BREADTH IS NOT DEPTH ─────────────────────────────────────────────────────────────
+//
+// The thin-service guard sizes a carrier so three sailings cannot outrank twenty on a two-day edge.
+// It counted raw options, which are inflatable by publishing routings nobody would book: WHL on
+// Laem Chabang -> New York publishes 32 options across three routings and only ONE is usable
+// against that lane's 41-day median. Counting usable options sizes a carrier by what it can
+// actually deliver.
+// THE VICTIM IS THE SMALL CARRIER, not the padded one. Shaped from the real case: HPL on
+// Ho Chi Minh -> Los Angeles/Long Beach offers 6 options and ALL SIX are usable, and it was
+// demoted as thin because the lane's yardstick was another carrier's 36 options, 23 of which
+// nobody would book. Measuring the yardstick in usable options rescues it.
+{
+  const rows = [
+    ...svc("SMALL", 6, 31, ["A"], "POD", 1), // small, but every option is worth having
+    ...svc("ANCHOR", 12, 32, ["C"], "POD", 2), // the biggest genuinely usable service
+    ...svc("PADDED", 6, 30, ["A"], "POD", 3), // 36 raw options, only 6 of them real
+    ...svc("PADDED", 30, 90, ["B"], "POD", 1),
+  ];
+  const cs = carrierStats(rows, LANE);
+  const padded = cs.find((c) => c.carrier === "PADDED");
+  const small = cs.find((c) => c.carrier === "SMALL");
+
+  check("the padded carrier holds the most raw options", padded.options, 36);
+  check("...but only six of them are usable", [padded.usableServices, padded.usableOptions], [1, 6]);
+  check("...so it no longer sets the yardstick", small.usableOptions >= padded.usableOptions, true);
+  // Under the old raw-options guard this read ANCHOR, PADDED, SMALL — the wholly usable carrier last.
+  check("the small, wholly usable carrier is not demoted", cs.map((c) => c.carrier), ["SMALL", "ANCHOR", "PADDED"]);
+}
+
+// MORE USABLE ROUTINGS BREAKS A TIE. Two carriers alike on directness, depth and substance are not
+// alike if one has a single acceptable routing and the other has two.
+{
+  const rows = [
+    ...svc("ONE_WAY", 10, 29, ["A"], "POD", 1),
+    ...svc("TWO_WAYS", 5, 29, ["A"], "POD", 2),
+    ...svc("TWO_WAYS", 5, 30, ["B"], "POD", 4),
+  ];
+  const cs = carrierStats(rows, LANE);
+  check("the carrier with two usable routings leads", cs.map((c) => c.carrier), ["TWO_WAYS", "ONE_WAY"]);
+  check("...on depth, not on speed", cs.map((c) => c.usableServices), [2, 1]);
 }
 
 // ── A DUPLICATED ROUTING IS NOT A FREQUENT ONE ───────────────────────────────────────
@@ -334,6 +428,160 @@ const svc = (carrier, count, days, via = [], pod = "POD", start = 1) =>
   const [corr] = corridorStats(rows, LANE);
   check("two carriers on one routing and one day", [corr.options, corr.sailDates], [3, 2]);
   check("...and both are named on the row", corr.carriers, ["A", "B"]);
+}
+
+// ── DESTINATION MODE: THE LANE IS THE CUSTOMER'S DOOR ────────────────────────────────
+//
+// Scoped to a port pair every carrier ends in the same place, so ocean transit is a fair
+// comparison. Scoped to a DESTINATION they do not: a Gainesville, FL warehouse is 84 road miles
+// from Jacksonville and 210 from Savannah. Comparing ocean legs then measures different journeys —
+// the same objection the file already raises against comparing on discharge port.
+
+// The Last CY entering the option key must be INVISIBLE inside a port pair. If it is not, every
+// number in the report moved, and the report is the thing that must not move.
+{
+  const rows = [...svc("A", 4, 30, ["H"]), ...svc("B", 3, 28, [])];
+  const cs = carrierStats(rows, LANE);
+  check("lane mode: option counts are untouched by the Last CY key", cs.map((c) => c.options), [3, 4]);
+  check("...and so are the services", cs.map((c) => c.services.length), [1, 1]);
+  check("...with no door figure invented", cs.every((c) => c.door === undefined), true);
+  check("...and no dray on any service", cs.every((c) => c.services.every((s) => !s.dray)), true);
+}
+
+// Two Last CYs on one chain and one day are TWO options. This is what stops Jacksonville and
+// Savannah collapsing into one routing the moment the frame stops naming a single port.
+{
+  const rows = [
+    { ...conn("A", day(1), 26, ["H"], "POD"), last_cy: "Jacksonville, FL" },
+    { ...conn("A", day(1), 28, ["H"], "POD"), last_cy: "Savannah, GA" },
+  ];
+  const c = carrierStats(rows)[0];
+  check("two Last CYs on one chain and one day are two options", c.options, 2);
+  check("...and two services, not one", c.services.length, 2);
+  check("...each naming where it lands", c.services.map((s) => s.lastCy).sort(), ["Jacksonville, FL", "Savannah, GA"]);
+  check("...and the carrier lists both", c.lastCys, ["Jacksonville, FL", "Savannah, GA"]);
+}
+
+// THE DRAY IS MEASURED FROM THE LAST CY, NOT THE DISCHARGE PORT — and they differ often.
+//
+// Measured on Nhava Sheva -> Gainesville, FL: HPL discharges at Savannah and carries the box on to
+// Tampa, and 26 of the 53 rows that search returns are that shape. The customer's drayage starts at
+// Tampa (137 mi), not Savannah (210). A service line naming only the chain would read as Savannah
+// being 137 miles away.
+{
+  const rows = svcTo("HPL", 6, 46, "Tampa, FL", [], "Savannah, GA");
+  const dray = new Map([
+    ["Tampa, FL", { miles: 137, hours: 2.3, days: 1 }],
+    ["Savannah, GA", { miles: 210, hours: 3.3, days: 2 }],
+  ]);
+  const s = carrierStats(rows, undefined, dray)[0].services[0];
+  check("the chain ends at the discharge port", s.label, "Savannah, GA");
+  check("...the hand-over is somewhere else", s.lastCy, "Tampa, FL");
+  check("...and the dray is measured from the hand-over", s.dray.miles, 137);
+  check("...so door transit uses Tampa's band, not Savannah's", s.doorMedian, 47);
+  // What the cell must render: the two are different, so both have to be named.
+  check("...which the row has to say out loud", s.label.endsWith(s.lastCy), false);
+}
+
+// The banding, at its edges. These are a judgement about how the move runs, so the edges are the
+// part worth pinning: an off-by-one here silently reorders the table.
+{
+  check("a 150-mile dray is one day", drayDays(150), 1);
+  check("...151 is two", drayDays(151), 2);
+  check("...400 is still two", drayDays(400), 2);
+  check("...401 is three", drayDays(401), 3);
+  check("a zero-mile dray is still a day, never nothing", drayDays(0), 1);
+  check("door transit adds the band", doorTransit(26, { miles: 210, hours: 3.3, days: 2 }), 28);
+  check("no ocean transit means no door transit", doorTransit(null, { miles: 84, hours: 1.6, days: 1 }), null);
+  check("...and neither does an unresolved ground leg", doorTransit(26, undefined), null);
+}
+
+// THE CASE THE WHOLE CHANGE EXISTS FOR.
+//
+// Savannah is two days' faster on the water and two days' worse on the ground. Ranked on ocean
+// transit the Savannah carrier wins; ranked door to door they tie at 28 and the shorter dray
+// breaks it. Shaped from the measured numbers: Jacksonville 84 mi, Savannah 210 mi.
+{
+  const rows = [
+    ...svcTo("SAV", 6, 26, "Savannah, GA", ["H"]),
+    ...svcTo("JAX", 6, 27, "Jacksonville, FL", ["H"], "POD", 2),
+  ];
+  // BUILT THROUGH `toDray`, from the numbers the live router actually returned for these two, so
+  // the banding is wired in rather than asserted by hand. A hand-built `{ days: 2 }` would keep
+  // this test passing even if the banding were flattened to nothing.
+  const dray = new Map([
+    ["Savannah, GA", toDray(210 * 1609.34, 3.3 * 3600)],
+    ["Jacksonville, FL", toDray(84 * 1609.34, 1.6 * 3600)],
+  ]);
+  check("the router's metres and seconds band correctly", [dray.get("Savannah, GA").miles, dray.get("Savannah, GA").days], [210, 2]);
+  check("...and the short one to a single day", [dray.get("Jacksonville, FL").miles, dray.get("Jacksonville, FL").days], [84, 1]);
+
+  const ocean = carrierStats(rows).map((c) => c.carrier);
+  check("on ocean transit alone the Savannah carrier leads", ocean, ["SAV", "JAX"]);
+
+  const door = carrierStats(rows, undefined, dray);
+  check("door to door they tie at 28 days", door.map((c) => c.door.median), [28, 28]);
+  check("...and the shorter ground leg wins", door.map((c) => c.carrier), ["JAX", "SAV"]);
+  check("...ocean transit is still reported unchanged", door.map((c) => c.transit.median), [27, 26]);
+  check("...and each service carries its own dray", door.map((c) => c.services[0].dray.miles), [84, 210]);
+}
+
+// WHEN THE GROUND LEG DISQUALIFIES A ROUTING — and when it cannot.
+//
+// The usable margin is 10% of the lane median and the banding spans 1-3 days, so drayage can only
+// push a routing out of reach when 2 days is more than a tenth of the lane: SHORT lanes. On a
+// 30-day trans-Pacific it never will, and claiming otherwise would be inventing a discrimination
+// the numbers do not support. Isolated here by giving both carriers the SAME ocean transit, so the
+// ground leg is the only thing that differs.
+{
+  const rows = [
+    ...svcTo("A", 4, 9, "Nearby, FL", ["H"]),
+    ...svcTo("B", 4, 9, "Nearby, FL", ["H"], "POD", 2),
+    ...svcTo("C", 4, 9, "Nearby, FL", ["H"], "POD", 3),
+    ...svcTo("D", 4, 9, "Nearby, FL", ["H"], "POD", 4),
+    ...svcTo("FAR", 4, 9, "Far, TX", ["H"], "POD", 5),
+  ];
+  const dray = new Map([
+    ["Nearby, FL", { miles: 84, hours: 1.6, days: 1 }],
+    ["Far, TX", { miles: 900, hours: 13, days: 3 }],
+  ]);
+  const cs = carrierStats(rows, undefined, dray);
+  const far = cs.find((c) => c.carrier === "FAR");
+  check("identical ocean transit, so ocean alone cannot separate them", far.transit.median, 9);
+  check("...but the long ground leg puts it out of reach", far.usableServices, 0);
+  check("...while the short one stays usable", cs.find((c) => c.carrier === "A").usableServices, 1);
+  check("...and it ranks last", cs[cs.length - 1].carrier, "FAR");
+}
+
+// The same shape on a LONG lane, where it correctly does NOT disqualify. Two days is inside 10% of
+// a 30-day median, so the ground leg shows up in the ordering and the miles, not in usability.
+{
+  const rows = [
+    ...svcTo("NEAR", 4, 30, "Jacksonville, FL", ["H"]),
+    ...svcTo("FAR", 4, 30, "Far, TX", ["H"], "POD", 5),
+  ];
+  const dray = new Map([
+    ["Jacksonville, FL", { miles: 84, hours: 1.6, days: 1 }],
+    ["Far, TX", { miles: 900, hours: 13, days: 3 }],
+  ]);
+  const cs = carrierStats(rows, undefined, dray);
+  check("on a 30-day lane a 2-day dray gap is inside the margin", cs.find((c) => c.carrier === "FAR").usableServices, 1);
+  check("...so it still ranks behind, on door transit", cs.map((c) => c.carrier), ["NEAR", "FAR"]);
+  check("...by exactly the banding", cs.map((c) => c.door.median), [31, 33]);
+}
+
+// An unresolved ground leg must not read as a short one.
+{
+  const rows = [
+    ...svcTo("KNOWN", 6, 30, "Jacksonville, FL", ["H"]),
+    ...svcTo("UNKNOWN", 6, 25, "Nowhere, ZZ", ["H"], "POD", 2),
+  ];
+  const dray = new Map([["Jacksonville, FL", { miles: 84, hours: 1.6, days: 1 }]]);
+  const cs = carrierStats(rows, undefined, dray);
+  const unk = cs.find((c) => c.carrier === "UNKNOWN");
+  check("an unresolved ground leg yields no door transit", unk.door.median, null);
+  check("...so the routing is not offered as usable", unk.usableServices, 0);
+  check("...and the resolved carrier ranks ahead of it", cs[0].carrier, "KNOWN");
 }
 
 console.log(failed ? `\n${failed} failure(s)` : "\nall checks passed");

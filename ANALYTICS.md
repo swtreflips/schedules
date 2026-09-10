@@ -342,6 +342,78 @@ markets, and only a POL → Last CY lane puts them on one screen.
 So a lane holding several PODs is **expected and desirable**, not fragmentation to be cleaned up.
 The corridor table is where the full picture of a single commercial move lives.
 
+## …and in the app, the lane is POL → THE CUSTOMER'S DOOR
+
+**The same argument, applied once more.** The box does not stop at the Last CY either — it stops at
+a warehouse. A Gainesville, FL warehouse is served through Jacksonville by the carriers that cover
+it, Savannah by others and Tampa by others again. Those are three answers to one question, and a
+POL → Last CY frame puts them on three separate screens.
+
+So there are now **two units, deliberately**:
+
+| | frame | where it lives | drayage |
+|---|---|---|---|
+| **Destination** | POL → the city the user typed | the Analytics tab | in the ranking |
+| **Port pair** | POL → Last CY | "Generate report" | none — every carrier ends in the same place |
+
+The app reads the search (`nearby_schedules` already returns every Last CY inside the radius, a
+PostGIS `st_dwithin` on `last_cy_geom`); the report reads the whole market and keeps the strict
+comparison. Both are useful and neither replaces the other: the app answers *"how do I get my box to
+this warehouse"*, the report answers *"who is good on this port pair"*.
+
+### Last CY becomes part of the option
+
+An option is `(carrier, ETD date, chain, LAST CY)`. The last field is new, and it is invisible
+inside a port pair — every row in a lane already shares one canonical Last CY — so **the report did
+not move**. Verified against the live market: option counts identical on 73 of 73 lanes, 2,997
+either way.
+
+Unscoped, it is load-bearing: **+651 options** that the old pipeline collapsed away across inland
+ramps. `dedupeConnections` had to change too, and its old comment said why it should not —
+*"`last_cy` is excluded so a market-wide view spanning several inland ramps does not count one
+connection several times"*. True under the connection model, wrong under the option model: one
+vessel discharging at Savannah for a Savannah Last CY and for an Atlanta ramp is one hull and **two
+things a forwarder can be asked to quote**.
+
+### Door transit, and why the ground leg is banded
+
+Once the routings end in different places, ocean transit compares different journeys. Ranking is on
+**door transit** — ocean plus the ground leg — measured with HERE truck routing through
+`/api/route-batch`, cached in `drayage_routes` (7.9s cold for five novel pairs, 281ms warm).
+
+⚠ **The banding is a judgement, and the alternative was tested first.** Adding raw drive time is
+useless: the default radius is 187 straight-line miles, so a ground leg is at most ~225 road miles ≈
+4 hours ≈ 0.17 days against a 30-day sailing. Half a percent. A door column built that way is the
+ocean column with noise on the end. So:
+
+| road miles | days | why |
+|---|---|---|
+| ≤ 150 | 1 | local dray — a same-day turn |
+| 151–400 | 2 | past local range; the driver cannot round-trip in a shift |
+| > 400 | 3 | linehaul |
+
+Measured on the case it was built for — Nhava Sheva → Gainesville, FL at 187 miles: Jacksonville
+84 mi and Tampa 137 both band to 1, Savannah 210 bands to 2. Cincinnati (90) and Louisville (67)
+into Seymour, IN both band to 1, so there the door ranking equals the ocean ranking and the **miles**
+carry the difference. That is the honest answer for that lane, not a failure to discriminate.
+
+**What the banding can and cannot do.** The usable margin is 10% of the lane median and the banding
+spans 1–3 days, so drayage only pushes a routing out of reach when 2 days exceeds a tenth of the
+lane — i.e. on **short** lanes. On a 30-day trans-Pacific it never will, and the tests say so in
+both directions rather than claiming a discrimination the numbers do not support.
+
+### The dray is measured from the LAST CY, not the discharge port
+
+They differ often, and the difference is the whole point. On Nhava Sheva → Gainesville, **26 of 53
+rows** discharge at Savannah with a Last CY of Tampa — the carrier carries the box on, and the
+customer's drayage starts at Tampa (137 mi), not Savannah (210). A service line naming only the
+chain would read as Savannah being 137 miles away, so the row names both:
+
+```
+Savannah, GA → Tampa, FL  ×6 · 46d · 137mi
+Savannah, GA              ×9 · 30d · 210mi     (POD and Last CY are the same place)
+```
+
 ## Corridor identity
 
 ```
@@ -480,9 +552,122 @@ has exactly one routing depth, so there is nothing to collapse and nothing to ex
 option-weighted for the same reason it is counted that way — connection-weighting let a chain
 published against 22 vessels count 22 times toward a carrier's routing depth.
 
-**Main service** is the routing a carrier offers the most options on, with the median *that*
-routing delivers — the honest headline, not the best case. WHL shows a 15-day best on Semarang →
-Los Angeles while the service it actually offers runs 20.5.
+**Usable services** replaced the single *Main service* column. A carrier is rarely one service, and
+describing it by its busiest routing alone reads correctly only when everything else it runs is much
+worse. See §The usable-service test below.
+
+**Main service** is still computed — it is `services[0]`, the routing a carrier offers the most
+options on, with the median *that* routing delivers — the honest headline, not the best case. WHL
+shows a 15-day best on Semarang → Los Angeles while the service it actually offers runs 20.5. It is
+now the *first line* of the stack rather than the whole story.
+
+### The usable-service test
+
+> A service is **usable** when its median transit is no worse than the lane median + 10%.
+
+The margin is not a new constant. `MATERIAL_GAIN = 0.1` already defined the smallest difference
+worth acting on, for the thin-service exemption. Turned around, it gives the definition for free: a
+routing inside the margin is not materially *slower* than typical, so it is one a customer can live
+with. Two numbers that must agree by hand would have been worse than one.
+
+Calibrated across all 255 carrier-lane cells before choosing +10%:
+
+| tolerance | 0 usable | exactly 1 | 2+ usable | options kept |
+|---|---|---|---|---|
+| +0% | 74 | 126 | 55 | 50% |
+| **+10%** | **43** | **131** | **81** | **66%** |
+| +20% | 31 | 128 | 96 | 79% |
+| +30% | 17 | 125 | 113 | 88% |
+
++10% separates the three real populations. At +20% and above "usable" stops excluding anything.
+
+**Why it is not called "secondary service".** The team's intuition was *primary vs secondary*, and
+the data does not support that framing: `mainRoute` is picked by option count, not speed, so the
+second service is **faster** than the main one in **44 of 142** carrier-lane cells with two or more.
+ZIM's Yantian routing on Laem Chabang → LA/LB runs 23 days against its own main service at 25. The
+question worth answering is not *how bad is the secondary* but **how many of this carrier's routings
+are worth quoting**.
+
+Two edge cases, both deliberate:
+
+- **No lane median** (no carrier published a transit) → every service stays usable. There is nothing
+  to fail against, and zeroing the lane would read as "nobody here is any good".
+- **A service with no median of its own** is not usable, on the standing rule that a carrier which
+  has published no transit is not a fast one.
+
+**What it changed in the sort.** Two edits, both tiebreaks — the lead is still direct options:
+
+1. The thin-service guard counts **usable** options, so the lane's yardstick is what can actually be
+   booked. This flips `thin()` on **59 of 238 cells** and reorders **5 of 37** multi-carrier lanes,
+   in both directions: HPL on Ho Chi Minh → LA/LB offers 6 options and *all six* are usable, and was
+   demoted as thin against a yardstick built from another carrier's 36 options, 23 of which nobody
+   would book. OOCL on Laem Chabang → LA/LB goes the other way — 21 options, 6 usable, correctly
+   demoted.
+2. **More usable routings breaks a tie** ahead of raw speed, below the thin guard. Depth is a reason
+   to prefer a carrier, not a reason to promote one whose service is too small to rely on.
+
+### What the test revealed about the market
+
+Measured on the live snapshot — 2,188 options, 511 carrier-services, 255 carrier-lane cells.
+
+**A third of the published market is noise.** 736 of 2,188 options (34%) sit on a routing materially
+slower than its lane's median; 173 of 511 services (34%) are not worth quoting at all.
+
+**Depth is the exception, not the rule.**
+
+| what the carrier gives you on that lane | cells | share |
+|---|---|---|
+| out of reach — 0 usable routings | 43 | 17% |
+| single-threaded — exactly 1 | 131 | 51% |
+| a real alternative — 2 | 52 | 20% |
+| genuinely deep — 3+ | 29 | 11% |
+
+**68% of carrier-lane pairs offer one usable way in, or none.** That is the finding that justifies
+the column: most of the time it reads "1", and *that is the information* — there is no fallback if
+the service is full.
+
+**Five of 33 multi-carrier lanes have no carrier with a second usable routing** — Nhava Sheva →
+Huntsville, Hai Phong → Philadelphia, Mundra → New York, Puerto Quetzal → LA/LB, and Qingdao → LA/LB
+(12 carriers, not one of them with a backup). These are the lanes where "that's the only option" is
+literally true, and nothing else in the view says so.
+
+**Carrier behaviour is consistent enough to be a property of the carrier.** This is a cross-lane
+view the per-lane table structurally cannot show, and the clearest argument for building View C:
+
+| carrier | lanes | options | usable | % real | deep lanes | out of reach |
+|---|---|---|---|---|---|---|
+| MSC | 20 | 197 | 180 | **91%** | 3 (15%) | 1 (5%) |
+| EMC | 16 | 105 | 81 | 77% | **9 (56%)** | 2 (13%) |
+| MSK | 22 | 115 | 87 | 76% | 8 (36%) | 4 (18%) |
+| WHL | 16 | 242 | 169 | 70% | 6 (38%) | 3 (19%) |
+| HMM | 24 | 249 | 170 | 68% | 5 (21%) | 5 (21%) |
+| YML | 20 | 124 | 81 | 65% | **11 (55%)** | 4 (20%) |
+| HPL | 25 | 209 | 136 | 65% | 7 (28%) | **8 (32%)** |
+| OOCL | 17 | 102 | 65 | 64% | 5 (29%) | 1 (6%) |
+| COS | 23 | 243 | 153 | 63% | 7 (30%) | 5 (22%) |
+| ONE | 28 | 189 | 115 | 61% | 11 (39%) | 2 (7%) |
+| CMA | 30 | 275 | 146 | **53%** | 7 (23%) | 3 (10%) |
+| ZIM | 14 | 138 | 69 | **50%** | 2 (14%) | **5 (36%)** |
+
+Two distinct strategies fall out of it. **MSC publishes little and almost all of it is competitive**
+(91% real, out of reach on one lane in twenty) — a narrow, clean network. **CMA publishes the widest
+network in the dataset (30 lanes, 275 options) and half of it is not worth quoting.** Neither is
+visible from any single lane. EMC and YML are the carriers that habitually give you a choice.
+
+**The trade-off is real and it is never free.** On **24 lanes the fastest carrier is not the one
+with the most ways in**, and on every one of those 24 the deeper carrier is slower — by 2 to 6 days:
+
+| lane | fastest | deepest | cost |
+|---|---|---|---|
+| Laem Chabang → LA/LB | MSC 23d, 1 way | ZIM 25d, 3 ways, 27 options | +2.0d |
+| Laem Chabang → Oakland | EMC 30d, 2 ways | WHL 32d, 3 ways, 34 options | +2.0d |
+| Ho Chi Minh → LA/LB | WHL 22d, 1 way | EMC 25d, 4 ways, 13 options | +3.0d |
+| Hai Phong → New York | ZIM 36.5d, 1 way | YML 40.5d, 5 ways, 20 options | +4.0d |
+| Semarang → Savannah | HMM 47d, 2 ways | HPL 53d, 4 ways, 14 options | +6.0d |
+
+There is no lane where depth comes for free. That is the honest shape of the decision the table now
+puts in front of the reader: **two days for triple the ways in** is a judgement a person should make,
+and the view's job is to show both numbers rather than to resolve it with a score.
 
 Counting options removes a trap rather than guarding against it. Under connections a routing looked
 popular for being *duplicated*: OOCL on Ho Chi Minh → Los Angeles had a Ningbo double-transship with
@@ -1070,7 +1255,9 @@ opening a browser. Build the map first and the only way to test a count is to lo
 The option is the right unit — it is what a forwarder quotes — but it is not a quality measure, and
 three things follow from that. All three are measured, none is fixed.
 
-## 1. The count rewards publishing breadth, and breadth is often junk
+## 1. ~~The count rewards publishing breadth~~ — FIXED by usable services
+
+*Superseded. Kept because the diagnosis was right and the fix follows from it directly.*
 
 An option costs a carrier nothing to publish. Measured, routings published per departure day:
 
@@ -1086,9 +1273,11 @@ include 37 that route through **Melbourne, Brisbane and Tauranga** at 60–65 da
 round-the-world strings, commercially absurd for Thailand → US East Coast. The option count says
 CMA is the richest carrier on that lane. It is the worst.
 
-**What saves the reader is the SORT, not the count.** Ordering leads with direct options, then
-`avgTs`, so CMA (0 direct, 2.00 avg TS) lands last. Read the column alone and it misleads; read the
-row and it does not. **Never rank on options.**
+**The fix is to count only what is worth quoting.** See §The usable-service test. Measured
+market-wide, **736 of 2,188 published options (34%) sit on a routing materially slower than its own
+lane's median** — they are noise on the lane they appear on, and they no longer inflate anything.
+The old advice — *"what saves the reader is the sort, not the count; never rank on options"* — is no
+longer the only defence: the count itself now discriminates.
 
 ## 2. Spread inside an option is now invisible
 
