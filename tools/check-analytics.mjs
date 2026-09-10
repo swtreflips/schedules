@@ -197,6 +197,38 @@ const svcTo = (carrier, count, days, lastCy, via = [], pod = "POD", start = 1) =
   check("a carrier with nothing in reach reads zero", [slow.usableServices, slow.usableOptions], [0, 0]);
 }
 
+// WHAT AN EMPTY DRAYAGE MAP DOES — and why the caller must not pass one.
+//
+// A Map with no entries is truthy, so handing it over engages destination mode with nothing in it:
+// every door median goes null, which blanks `vs lane` for the whole table AND marks every routing
+// usable, because a null benchmark disqualifies nothing. That was the state for the seconds the
+// router takes on a cold destination, and permanently whenever it failed.
+//
+// The behaviour below is correct for the argument given — there is genuinely nothing to compare —
+// so the fix belongs at the call site, which passes `undefined` when nothing resolved. Both halves
+// are pinned here so neither can drift.
+{
+  const rows = [
+    ...svcTo("A", 6, 20, "Jacksonville, FL"),
+    ...svcTo("B", 6, 30, "Jacksonville, FL", ["H"], "POD", 2),
+    ...svcTo("C", 6, 40, "Savannah, GA", ["H"], "POD", 3),
+  ];
+  const empty = carrierStats(rows, undefined, new Map());
+  check("an empty dray map blanks every vs-lane", empty.map((c) => c.vsLaneMedian), [null, null, null]);
+  check("...and marks even a hopeless routing usable", empty.find((c) => c.carrier === "C").usableServices, 1);
+
+  // Which is why the view passes undefined instead, giving the ocean ranking the report uses.
+  const ocean = carrierStats(rows, undefined, undefined);
+  check("no map at all ranks on ocean, with real numbers", ocean.map((c) => c.vsLaneMedian), [-10, 0, 10]);
+  check("...and disqualifies the hopeless routing again", ocean.find((c) => c.carrier === "C").usableServices, 0);
+
+  // A PARTIAL MAP IS DIFFERENT, and its dash is honest: that carrier's ground leg is unknown, so it
+  // has no door transit to compare. Nothing to fall back to — the other carriers do have legs.
+  const partial = carrierStats(rows, undefined, new Map([["Jacksonville, FL", { miles: 84, hours: 1.6, days: 1 }]]));
+  check("an unresolved leg dashes only that carrier", partial.find((c) => c.carrier === "C").vsLaneMedian, null);
+  check("...while the resolved ones still compare", partial.find((c) => c.carrier === "A").vsLaneMedian, -5);
+}
+
 // A LANE WITH NO PUBLISHED TRANSIT HAS NO BENCHMARK, so nothing is disqualified. Zeroing every
 // carrier would read as "no carrier here is any good" when the truth is "no transit was published".
 {

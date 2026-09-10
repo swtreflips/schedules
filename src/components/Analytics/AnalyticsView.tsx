@@ -265,7 +265,17 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
 
   // NO LANE ARGUMENT. `inLane(rows, undefined)` returns the rows untouched, so the statistics run
   // over the whole search — every Last CY within the radius — rather than one port pair.
-  const carriers = useMemo(() => carrierStats(rows, undefined, dray), [rows, dray]);
+  //
+  // AN EMPTY MAP MUST NOT ENGAGE DESTINATION MODE. It is truthy, so passing it turned every door
+  // median null, which blanked `vs lane` for the entire table AND — because a null benchmark
+  // disqualifies nothing — marked every routing usable, including ones twenty days out of reach.
+  // That was the state for the ~8 seconds the router takes on a cold destination, and permanently
+  // whenever it failed. With no legs resolved there is nothing to add to the ocean leg, so the
+  // honest fallback is the ocean ranking, which is exactly what the report already does.
+  const carriers = useMemo(
+    () => carrierStats(rows, undefined, dray.size ? dray : undefined),
+    [rows, dray],
+  );
   const corridors = useMemo(() => corridorStats(rows), [rows]);
 
   const lane: Lane = useMemo(
@@ -307,9 +317,19 @@ export function AnalyticsView({ rows, destination, pol, radiusMiles, searching }
         {/* Said out loud: a door figure that is quietly missing its ground leg is worse than one
             that admits it, because the number still looks complete. */}
         {drayLoading && <span className="an-meta an-dim">measuring drayage…</span>}
-        {drayError && (
-          <span className="an-meta an-slow" title={drayError}>
+        {/* Both of these are now true statements rather than hopeful ones: with no legs resolved the
+            table really does fall back to the ocean ranking. */}
+        {!drayLoading && !dray.size && lastCys.length > 0 && (
+          <span className="an-meta an-slow" title={drayError ?? undefined}>
             drayage unavailable — ranked on ocean transit only
+          </span>
+        )}
+        {!drayLoading && dray.size > 0 && dray.size < lastCys.length && (
+          <span
+            className="an-meta an-slow"
+            title={lastCys.filter((cy) => !dray.has(cy)).join("\n")}
+          >
+            {lastCys.length - dray.size} of {lastCys.length} discharge points have no road distance
           </span>
         )}
         <ReportButton />
