@@ -1,5 +1,5 @@
 import type { Schedule } from "../../types/schedule";
-import { routeLabel } from "./ports";
+import { canonicalPort, routeLabel } from "./ports";
 
 /**
  * The unit of analysis is a CONNECTION: one bookable way to move the box from POL to Last CY.
@@ -39,8 +39,19 @@ import { routeLabel } from "./ports";
  * WHICH survives depends on row order - the Taipei corridor lost a connection to Kaohsiung
  * exactly that way before this was added.
  *
- * `last_cy` is excluded so a market-wide view spanning several inland ramps does not count one
- * connection several times.
+ * `last_cy` IS in the key, and used to be excluded — "so a market-wide view spanning several inland
+ * ramps does not count one connection several times". That was right under the connection model and
+ * wrong under the option model. One vessel discharging at Savannah for a Savannah Last CY and for an
+ * Atlanta ramp is one hull and TWO things a forwarder can be asked to quote: different ground moves,
+ * different cost, and a customer can be sold either. Collapsing them lost one entirely.
+ *
+ * It is invisible where the frame already fixes the Last CY — inside a POL -> Last CY lane every row
+ * shares one, so nothing changes and the report is untouched. It is load-bearing where the frame is
+ * a DESTINATION and the box can be handed over at several places. Measured at 45 rows of 2,865 when
+ * the exclusion was introduced.
+ *
+ * Matched on the canonical name, so folding a port complex still collapses `Los Angeles, CA` and
+ * `Long Beach, CA` into one the way the lane does.
  */
 export function dedupeConnections(rows: Schedule[]): Schedule[] {
   const seen = new Set<string>();
@@ -52,6 +63,7 @@ export function dedupeConnections(rows: Schedule[]): Schedule[] {
       r.etd ?? "",
       r.eta ?? "",
       r.port_of_discharge,
+      canonicalPort(r.last_cy),
       (r.vessel_sequence ?? []).join(">"),
       (r.ts_ports ?? []).join(">"),
     ].join("\u0000");
@@ -153,6 +165,16 @@ export interface Option {
   /** `routeLabel` — the transshipment path then the discharge port, port complexes folded. */
   chain: string;
   pod: string;
+  /**
+   * Where the carrier's own responsibility ends, canonicalised.
+   *
+   * PART OF AN OPTION'S IDENTITY, not a label on it. Scoped to one lane this is constant and
+   * changes nothing — `inLane` already matched on it. Scoped to a DESTINATION it is the whole
+   * point: a Gainesville warehouse is served through Jacksonville by some carriers and Savannah by
+   * others, and without this those two land under one routing and stop being separate things a
+   * forwarder can be asked for.
+   */
+  lastCy: string;
   ts: number;
   /**
    * Median of this option's published arrivals, or null when none carry a transit.
@@ -183,7 +205,13 @@ export function toOptions(rows: Schedule[]): Option[] {
     const date = (c.etd ?? "").slice(0, 10);
     if (!date) continue; // an unscheduled sailing is not something anyone can be quoted
     // U+0000 cannot occur in a carrier code, a date or a port name, so parts cannot collide.
-    const key = [c.carrier_code, date, routeLabel(c)].join("\u0000");
+    //
+    // LAST CY IS IN THE KEY. Within a single POL -> Last CY lane every row already shares one
+    // canonical Last CY (`inLane` matches on it), so this is a no-op there and every count is
+    // unchanged. Across a DESTINATION radius it is load-bearing: one carrier sailing one chain on
+    // one day to Jacksonville and to Savannah is two options, because they are two different
+    // propositions with two different ground moves at the far end.
+    const key = [c.carrier_code, date, routeLabel(c), canonicalPort(c.last_cy)].join("\u0000");
     const bucket = groups.get(key);
     if (bucket) bucket.push(c);
     else groups.set(key, [c]);
@@ -197,6 +225,7 @@ export function toOptions(rows: Schedule[]): Option[] {
       date: (first.etd ?? "").slice(0, 10),
       chain: routeLabel(first),
       pod: first.port_of_discharge,
+      lastCy: canonicalPort(first.last_cy),
       // SHALLOWEST, NOT THE FIRST ROW'S. Folding a port complex can put a direct and a feeder to
       // the other berth under one label, and what the routing is worth is the shallower of them.
       // Same rule `mainRoute` applies for the same reason.
