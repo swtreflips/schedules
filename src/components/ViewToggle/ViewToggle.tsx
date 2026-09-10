@@ -18,8 +18,13 @@ const OPTIONS: Array<{ value: ViewMode; label: string; hint: string }> = [
   },
   {
     value: "analytics",
-    label: "Analytics",
-    hint: "How the market serves your destination — carriers ranked door to door, drayage included",
+    // The tab is MARKET; the value stays "analytics" because it is a route key, not a label — a
+    // stored view preference would break on a rename that gains nothing.
+    label: "Market",
+    // Kept honest: drayage was in the ranking when this hint was written, and is not any more.
+    hint:
+      "How the market serves your destination — carriers ranked on transit, with the drayage "
+      + "left to you shown beside it",
   },
 ];
 
